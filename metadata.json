@@ -1,0 +1,5 @@
+{
+  "name": "Flowgen Studio",
+  "description": "An AI-powered tool to transform ordinary product photos into polished, professional visuals. Upload a product, choose a style reference or preset, and generate multiple high-quality images in various aspect ratios.",
+  "requestFramePermissions": []
+}
