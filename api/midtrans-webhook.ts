@@ -105,7 +105,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (isSuccess || statusCode === '200') {
 
             // Check Idempotency
-            if (txData.status === 'paid' || txData.credited === true) {
+            if ((txData as any).status === 'paid' || (txData as any).credited === true) {
                 console.log('Already credited:', rawOrderId);
                 return res.status(200).send('OK: Already processed');
             }
@@ -122,8 +122,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 return res.status(200).send('OK: Already processed');
             }
 
-            let userId = txData.user_id;
-            let creditsToAdd = txData.credits_to_add || 0;
+            let userId = (txData as any).user_id;
+            let creditsToAdd = (txData as any).credits_to_add || 0;
 
             // Flowgen strict signup rule if missing credits
             if (app === 'FLG' && type === 'SIGNUP' && creditsToAdd === 0) {
@@ -133,16 +133,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
             // For SIGNUP: create or find user
             if (!userId && type === 'SIGNUP') {
-                userId = await resolveOrCreateUser(txData.email, txData.username, txData.password, app);
+                userId = await resolveOrCreateUser((txData as any).email, (txData as any).username, (txData as any).password, app);
             }
 
             if (!userId) {
                 // For topup without userId, we can't credit.
                 console.error('No user_id for order:', rawOrderId);
-                await supabase.from('transactions').update({
+                const failPayload: any = {
                     status: 'paid',
                     raw_notification: notification
-                }).eq('order_id', rawOrderId);
+                };
+                // @ts-ignore
+                await supabase.from('transactions').update(failPayload).eq('order_id', rawOrderId);
                 return res.status(200).send('OK: No user to credit');
             }
 
@@ -153,7 +155,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 .eq('id', userId)
                 .single();
 
-            const newCredits = (currentUser?.credits || 0) + creditsToAdd;
+            const newCredits = ((currentUser as any)?.credits || 0) + creditsToAdd;
             const updateData: any = { credits: newCredits, updated_at: new Date().toISOString() };
 
             if (type === 'SIGNUP') {
@@ -162,49 +164,57 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
             // Update user
             if (currentUser) {
+                // @ts-ignore
                 await supabase.from('users').update(updateData as any).eq('id', userId);
             } else {
-                await supabase.from('users').upsert({
+                const newUserPayload: any = {
                     id: userId,
                     app: app,
-                    email: txData!.email,
-                    username: txData!.username,
+                    email: (txData as any).email,
+                    username: (txData as any).username,
                     credits: creditsToAdd,
                     pro_active: type === 'SIGNUP' ? true : false,
-                } as any);
+                };
+                // @ts-ignore
+                await supabase.from('users').upsert(newUserPayload);
             }
 
             // Update transaction to paid and credited
+            const successPayload: any = {
+                status: 'paid',
+                credited: true,
+                credited_at: new Date().toISOString(),
+                user_id: userId,
+                payment_type: notification.payment_type || null,
+                raw_notification: notification,
+            };
+            // @ts-ignore
             await supabase
                 .from('transactions')
-                .update({
-                    status: 'paid',
-                    credited: true,
-                    credited_at: new Date().toISOString(),
-                    user_id: userId,
-                    payment_type: notification.payment_type || null,
-                    raw_notification: notification,
-                } as any)
+                .update(successPayload)
                 .eq('order_id', rawOrderId);
 
             // Insert into processed notifications to guarantee idempotency
-            await supabase.from('processed_notifications').insert({
+            const notifPayload: any = {
                 order_id: rawOrderId,
-                transaction_id: txData!.id,
+                transaction_id: (txData as any).id,
                 payload: notification
-            } as any);
+            };
+            await supabase.from('processed_notifications').insert(notifPayload);
 
             console.log('Credits applied:', { orderId: rawOrderId, userId, creditsToAdd, app, type });
 
         } else {
             // ── NOT SUCCESS ──
             const mappedStatus = finalStatus === 'pending' ? 'pending' : (finalStatus === 'failed' ? 'failed' : 'expired');
+            const errorPayload: any = {
+                status: mappedStatus,
+                raw_notification: notification,
+            };
+            // @ts-ignore
             await supabase
                 .from('transactions')
-                .update({
-                    status: mappedStatus,
-                    raw_notification: notification,
-                } as any)
+                .update(errorPayload)
                 .eq('order_id', rawOrderId);
 
             console.log('Status updated:', { orderId: rawOrderId, status: mappedStatus });
