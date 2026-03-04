@@ -6,13 +6,20 @@ const supabaseUrl = process.env.VITE_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const midtransServerKey = process.env.MIDTRANS_SERVER_KEY!;
 
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+let supabase: ReturnType<typeof createClient>;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === 'OPTIONS') return res.status(200).send('OK');
     if (req.method !== 'POST') return res.status(200).send('OK');
 
     try {
+        if (!supabaseUrl || !supabaseServiceKey) {
+            console.error('Webhook Error: Missing Supabase Environment Variables in Vercel');
+            return res.status(200).send('OK: Missing Config'); // Return 200 to prevent Midtrans retry spam
+        }
+        if (!supabase) {
+            supabase = createClient(supabaseUrl, supabaseServiceKey);
+        }
         const notification = req.body;
         if (!notification || !notification.order_id) {
             console.warn('Webhook: missing order_id');
@@ -73,7 +80,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 credits_to_add: 0, // Cannot assume credits to add if missing!
                 status: 'pending',
                 raw_notification: notification
-            }).select().single();
+            } as any).select().single();
 
             if (insertErr || !newTx) {
                 console.error('Failed to create placeholder tx', insertErr);
@@ -155,16 +162,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
             // Update user
             if (currentUser) {
-                await supabase.from('users').update(updateData).eq('id', userId);
+                await supabase.from('users').update(updateData as any).eq('id', userId);
             } else {
                 await supabase.from('users').upsert({
                     id: userId,
                     app: app,
-                    email: txData.email,
-                    username: txData.username,
+                    email: txData!.email,
+                    username: txData!.username,
                     credits: creditsToAdd,
                     pro_active: type === 'SIGNUP' ? true : false,
-                });
+                } as any);
             }
 
             // Update transaction to paid and credited
@@ -177,15 +184,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     user_id: userId,
                     payment_type: notification.payment_type || null,
                     raw_notification: notification,
-                })
+                } as any)
                 .eq('order_id', rawOrderId);
 
             // Insert into processed notifications to guarantee idempotency
             await supabase.from('processed_notifications').insert({
                 order_id: rawOrderId,
-                transaction_id: txData.id,
+                transaction_id: txData!.id,
                 payload: notification
-            });
+            } as any);
 
             console.log('Credits applied:', { orderId: rawOrderId, userId, creditsToAdd, app, type });
 
@@ -197,7 +204,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 .update({
                     status: mappedStatus,
                     raw_notification: notification,
-                })
+                } as any)
                 .eq('order_id', rawOrderId);
 
             console.log('Status updated:', { orderId: rawOrderId, status: mappedStatus });

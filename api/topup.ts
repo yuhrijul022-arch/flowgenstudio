@@ -7,7 +7,7 @@ const midtransServerKey = process.env.MIDTRANS_SERVER_KEY!;
 const midtransClientKey = process.env.MIDTRANS_CLIENT_KEY!;
 const midtransIsProd = process.env.MIDTRANS_IS_PROD === 'true';
 
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+let supabase: ReturnType<typeof createClient>;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -18,6 +18,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
     try {
+        if (!supabaseUrl || !supabaseServiceKey) {
+            console.error('Missing Supabase Environment Variables in Vercel');
+            return res.status(500).json({ error: 'Server configuration error: Missing Supabase keys.' });
+        }
+        if (!supabase) {
+            supabase = createClient(supabaseUrl, supabaseServiceKey);
+        }
         // Verify auth
         const authHeader = req.headers.authorization;
         if (!authHeader?.startsWith('Bearer ')) {
@@ -105,7 +112,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             snap_token: snapToken,
             status: 'pending',
             credited: false,
-        });
+        } as any);
 
         return res.status(200).json({
             snapToken,
