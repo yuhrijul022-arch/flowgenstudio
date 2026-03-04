@@ -40,7 +40,7 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({ isOpen, onClose }) => {
                 return;
             }
 
-            const baseUrl = import.meta.env.VITE_BASE_URL || '';
+            const baseUrl = import.meta.env.PROD ? '' : (import.meta.env.VITE_BASE_URL || '');
             const response = await fetch(`${baseUrl}/api/topup`, {
                 method: 'POST',
                 headers: {

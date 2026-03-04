@@ -8,7 +8,7 @@ import { v4 as uuidv4 } from "uuid";
 
 const db = getFirestore();
 const storage = getStorage();
-const geminiApiKey = defineSecret("GEMINI_API_KEY");
+const geminiApiKey = defineSecret("VITE_GEMINI_API_KEY");
 
 // ── Prompt builder (ported from client geminiService) ──────────
 function buildPrompt(

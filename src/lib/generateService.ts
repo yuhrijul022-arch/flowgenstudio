@@ -47,9 +47,7 @@ export async function reserveAndGenerate(
     if (!session) {
         throw new Error('Not authenticated. Please sign in.');
     }
-
-    const baseUrl = import.meta.env.VITE_BASE_URL || '';
-
+    const baseUrl = import.meta.env.PROD ? '' : (import.meta.env.VITE_BASE_URL || '');
     const response = await fetch(`${baseUrl}/api/generate`, {
         method: 'POST',
         headers: {

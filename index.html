@@ -1,33 +1,44 @@
-
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'%3E%3Crect width='24' height='24' rx='6' fill='white'/%3E%3Crect x='5' y='5' width='5' height='14' fill='black'/%3E%3Cpath d='M12 5V19C16.5 19 19 16 19 12C19 8 16.5 5 12 5Z' fill='black'/%3E%3C/svg%3E" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Flowgen Studio</title>
-    
-    <!-- Google Fonts: Inter -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            fontFamily: {
-              sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'San Francisco', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'sans-serif'],
-            },
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml"
+    href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'%3E%3Crect width='24' height='24' rx='6' fill='white'/%3E%3Crect x='5' y='5' width='5' height='14' fill='black'/%3E%3Cpath d='M12 5V19C16.5 19 19 16 19 12C19 8 16.5 5 12 5Z' fill='black'/%3E%3C/svg%3E" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flowgen Studio</title>
+
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'San Francisco', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'sans-serif'],
           },
         },
-      }
-    </script>
+      },
+    }
+  </script>
+  <script>
+    window.addEventListener('error', function (event) {
+      document.body.innerHTML += '<div style="background:red;color:white;padding:20px;position:absolute;top:0;left:0;z-index:9999;width:100%;font-family:monospace;"><h3>CRITICAL ERROR:</h3><p>' + event.message + '</p><pre>' + event.error?.stack + '</pre></div>';
+    });
+    window.addEventListener('unhandledrejection', function (event) {
+      document.body.innerHTML += '<div style="background:darkred;color:white;padding:20px;position:absolute;top:100px;left:0;z-index:9999;width:100%;font-family:monospace;"><h3>UNHANDLED PROMISE REJECTION:</h3><p>' + event.reason + '</p></div>';
+    });
+  </script>
 
 </head>
-  <body class="bg-black text-white antialiased">
-    <div id="root"></div>
-    <script type="module" src="/index.tsx"></script>
-  </body>
+
+<body class="bg-black text-white antialiased">
+  <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+
 </html>
