@@ -56,8 +56,9 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({ isOpen, onClose }) => {
             }
 
             const result = await response.json();
-            const { snapToken, clientKey, isProduction } = result;
-
+            const snapToken = result.snapToken || result.data?.snapToken;
+            const clientKey = import.meta.env.VITE_MIDTRANS_CLIENT_KEY || result.clientKey;
+            const isProduction = import.meta.env.VITE_MIDTRANS_IS_PROD === 'true';
             // Load Snap JS if not loaded
             if (!(window as any).snap) {
                 const script = document.createElement('script');

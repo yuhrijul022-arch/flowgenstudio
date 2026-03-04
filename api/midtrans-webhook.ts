@@ -9,7 +9,6 @@ const midtransServerKey = process.env.MIDTRANS_SERVER_KEY!;
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-    // Midtrans requires 200 response even on errors to prevent retries
     if (req.method === 'OPTIONS') return res.status(200).send('OK');
     if (req.method !== 'POST') return res.status(200).send('OK');
 
@@ -31,46 +30,56 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         console.log('Webhook received:', { orderId: rawOrderId, status: transactionStatus });
 
-        // Only handle FLG- orders
-        if (!rawOrderId.startsWith('FLG-')) {
-            return res.status(200).send('OK: Not FLG order');
-        }
-
-        // Verify signature
+        // 1. Verify signature
         const grossAmountStr = String(grossAmountRaw);
         const stringToSign = `${rawOrderId}${statusCode}${grossAmountStr}${midtransServerKey}`;
         const expectedSignature = createHash('sha512').update(stringToSign).digest('hex');
 
         if (signatureKey !== expectedSignature) {
             console.error('Webhook: signature mismatch', { orderId: rawOrderId });
-            return res.status(200).send('OK: Invalid signature');
+            return res.status(401).send('Unauthorized: Invalid signature');
         }
 
-        // Resolve order — handle retry IDs (FLG-xxx-Rxxxx)
-        let firestoreDocOrderId = rawOrderId;
+        // 2. Parse order_id (Format: <APP>-<TYPE>-...)
+        const parts = rawOrderId.split('-');
+        if (parts.length < 3) {
+            console.warn('Webhook: Invalid order_id format', { rawOrderId });
+            return res.status(200).send('OK: Invalid format');
+        }
+
+        const app = parts[0]; // FLG, VIS, SPK
+        const type = parts[1]; // SIGNUP, TOPUP
+
+        if (!['FLG', 'VIS', 'SPK'].includes(app)) {
+            console.warn('Webhook: Unknown app code', { app });
+            return res.status(200).send('OK: Unknown app');
+        }
+
+        // 3. Find transaction
         let { data: txData, error: txError } = await supabase
-            .from('billing_transactions')
+            .from('transactions')
             .select('*')
-            .eq('order_id', firestoreDocOrderId)
+            .eq('order_id', rawOrderId)
             .single();
 
         if (!txData) {
-            // Try stripping retry suffix
-            const retryMatch = rawOrderId.match(/^(.+)-R\d+$/);
-            if (retryMatch) {
-                firestoreDocOrderId = retryMatch[1];
-                const result = await supabase
-                    .from('billing_transactions')
-                    .select('*')
-                    .eq('order_id', firestoreDocOrderId)
-                    .single();
-                txData = result.data;
-            }
-        }
+            console.warn('Webhook: missing transaction draft, creating placeholder', { rawOrderId });
+            const { data: newTx, error: insertErr } = await supabase.from('transactions').insert({
+                app: app,
+                order_id: rawOrderId,
+                type: type,
+                amount: parseInt(grossAmountStr, 10),
+                email: 'unknown@webhook.com',  // Placeholder since payload doesn't have email reliably
+                credits_to_add: 0, // Cannot assume credits to add if missing!
+                status: 'pending',
+                raw_notification: notification
+            }).select().single();
 
-        if (!txData) {
-            console.warn('Webhook: order not found', { rawOrderId });
-            return res.status(200).send('OK: Order not found');
+            if (insertErr || !newTx) {
+                console.error('Failed to create placeholder tx', insertErr);
+                return res.status(200).send('OK');
+            }
+            txData = newTx;
         }
 
         // Determine transaction outcome
@@ -86,90 +95,112 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
 
         // ── SUCCESS ──
-        if (isSuccess) {
-            // Idempotency: check if already credited
-            if (txData.status === 'success') {
-                console.log('Already credited:', firestoreDocOrderId);
+        if (isSuccess || statusCode === '200') {
+
+            // Check Idempotency
+            if (txData.status === 'paid' || txData.credited === true) {
+                console.log('Already credited:', rawOrderId);
+                return res.status(200).send('OK: Already processed');
+            }
+
+            // Ensure not processed in processed_notifications table
+            const { data: existingNotif } = await supabase
+                .from('processed_notifications')
+                .select('id')
+                .eq('order_id', rawOrderId)
+                .single();
+
+            if (existingNotif) {
+                console.log('Already processed in notifications table:', rawOrderId);
                 return res.status(200).send('OK: Already processed');
             }
 
             let userId = txData.user_id;
-            const creditsToAdd = txData.credits || 0;
+            let creditsToAdd = txData.credits_to_add || 0;
 
-            // For signup_pro: create or find user
-            if (!userId && txData.type === 'signup_pro') {
-                userId = await resolveOrCreateUser(txData.email, txData.username, txData.password);
+            // Flowgen strict signup rule if missing credits
+            if (app === 'FLG' && type === 'SIGNUP' && creditsToAdd === 0) {
+                // If the draft was missing but we know it's a FLG signup, default to 60.
+                creditsToAdd = 60;
+            }
+
+            // For SIGNUP: create or find user
+            if (!userId && type === 'SIGNUP') {
+                userId = await resolveOrCreateUser(txData.email, txData.username, txData.password, app);
             }
 
             if (!userId) {
-                console.error('No user_id for order:', firestoreDocOrderId);
-                return res.status(200).send('OK: No user');
+                // For topup without userId, we can't credit.
+                console.error('No user_id for order:', rawOrderId);
+                await supabase.from('transactions').update({
+                    status: 'paid',
+                    raw_notification: notification
+                }).eq('order_id', rawOrderId);
+                return res.status(200).send('OK: No user to credit');
             }
 
-            // Get current credits
+            // Get current user credits
             const { data: currentUser } = await supabase
                 .from('users')
-                .select('credits, tier')
+                .select('credits, pro_active')
                 .eq('id', userId)
                 .single();
 
             const newCredits = (currentUser?.credits || 0) + creditsToAdd;
-            const updateData: any = { credits: newCredits };
+            const updateData: any = { credits: newCredits, updated_at: new Date().toISOString() };
 
-            if (txData.type === 'signup_pro') {
-                updateData.tier = 'PRO';
+            if (type === 'SIGNUP') {
+                updateData.pro_active = true;
             }
 
-            // Update user credits
-            await supabase
-                .from('users')
-                .update(updateData)
-                .eq('id', userId);
-
-            // If user doesn't exist yet, create the row
-            if (!currentUser) {
+            // Update user
+            if (currentUser) {
+                await supabase.from('users').update(updateData).eq('id', userId);
+            } else {
                 await supabase.from('users').upsert({
                     id: userId,
+                    app: app,
                     email: txData.email,
                     username: txData.username,
                     credits: creditsToAdd,
-                    tier: txData.type === 'signup_pro' ? 'PRO' : 'FREE',
+                    pro_active: type === 'SIGNUP' ? true : false,
                 });
             }
 
-            // Insert credit ledger
-            await supabase.from('credit_ledger').insert({
-                user_id: userId,
-                amount: creditsToAdd,
-                type: txData.type === 'signup_pro' ? 'purchase' : 'topup',
-                reference: firestoreDocOrderId,
-            });
-
-            // Update transaction
+            // Update transaction to paid and credited
             await supabase
-                .from('billing_transactions')
+                .from('transactions')
                 .update({
-                    status: 'success',
+                    status: 'paid',
+                    credited: true,
+                    credited_at: new Date().toISOString(),
                     user_id: userId,
                     payment_type: notification.payment_type || null,
-                    midtrans_response: notification,
+                    raw_notification: notification,
                 })
-                .eq('order_id', firestoreDocOrderId);
+                .eq('order_id', rawOrderId);
 
-            console.log('Credits applied:', { orderId: firestoreDocOrderId, userId, creditsToAdd });
+            // Insert into processed notifications to guarantee idempotency
+            await supabase.from('processed_notifications').insert({
+                order_id: rawOrderId,
+                transaction_id: txData.id,
+                payload: notification
+            });
+
+            console.log('Credits applied:', { orderId: rawOrderId, userId, creditsToAdd, app, type });
 
         } else {
             // ── NOT SUCCESS ──
-            const mappedStatus = finalStatus === 'pending' ? 'pending' : 'failed';
+            const mappedStatus = finalStatus === 'pending' ? 'pending' : (finalStatus === 'failed' ? 'failed' : 'expired');
             await supabase
-                .from('billing_transactions')
+                .from('transactions')
                 .update({
                     status: mappedStatus,
-                    midtrans_response: notification,
+                    raw_notification: notification,
                 })
-                .eq('order_id', firestoreDocOrderId);
+                .eq('order_id', rawOrderId);
 
-            console.log('Status updated:', { orderId: firestoreDocOrderId, status: mappedStatus });
+            console.log('Status updated:', { orderId: rawOrderId, status: mappedStatus });
         }
 
         return res.status(200).send('OK');
@@ -181,14 +212,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 }
 
 /**
- * For signup_pro: find existing Auth user by email, or create one.
+ * For SIGNUP: find existing Auth user by email, or create one.
  */
 async function resolveOrCreateUser(
     email: string,
     username: string | null,
-    password: string | null
+    password: string | null,
+    app: string
 ): Promise<string> {
-    // Try to find existing user by email
     const { data: users } = await supabase.auth.admin.listUsers();
     const existing = users?.users?.find(u => u.email === email);
 
@@ -196,12 +227,12 @@ async function resolveOrCreateUser(
         return existing.id;
     }
 
-    // Create new user
     const { data: newUser, error } = await supabase.auth.admin.createUser({
         email,
         password: password || Math.random().toString(36).substring(2, 14),
         user_metadata: {
             full_name: username || undefined,
+            app: app // Tag to distinguish origin
         },
         email_confirm: true,
     });

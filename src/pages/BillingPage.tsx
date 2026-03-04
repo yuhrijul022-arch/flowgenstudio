@@ -35,7 +35,7 @@ export const BillingPage: React.FC = () => {
 
             // Fetch transactions
             const { data, error } = await supabase
-                .from('billing_transactions')
+                .from('transactions')
                 .select('*')
                 .eq('user_id', uid)
                 .order('created_at', { ascending: false });
@@ -56,13 +56,13 @@ export const BillingPage: React.FC = () => {
                     {
                         event: '*',
                         schema: 'public',
-                        table: 'billing_transactions',
+                        table: 'transactions',
                         filter: `user_id=eq.${uid}`,
                     },
                     () => {
                         // Refetch on any change
                         supabase
-                            .from('billing_transactions')
+                            .from('transactions')
                             .select('*')
                             .eq('user_id', uid)
                             .order('created_at', { ascending: false })

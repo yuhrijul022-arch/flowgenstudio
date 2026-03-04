@@ -93,16 +93,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const snapData = await snapResponse.json();
         const snapToken = snapData.token;
 
-        // Save to billing_transactions
-        await supabase.from('billing_transactions').insert({
+        // Save to transactions
+        await supabase.from('transactions').insert({
+            app: 'FLG',
             order_id: orderId,
-            type: 'topup',
+            type: 'TOPUP',
             user_id: uid,
             email,
-            credits: creditsQty,
+            credits_to_add: creditsQty,
             amount: totalPrice,
             snap_token: snapToken,
             status: 'pending',
+            credited: false,
         });
 
         return res.status(200).json({

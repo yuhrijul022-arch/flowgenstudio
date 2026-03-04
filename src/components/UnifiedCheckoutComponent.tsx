@@ -121,7 +121,9 @@ export const UnifiedCheckoutComponent: React.FC = () => {
 
             const result = await response.json();
             const data = result.data;
-            openSnap(data.snapToken, data.clientKey, data.isProduction);
+            const clientKey = import.meta.env.VITE_MIDTRANS_CLIENT_KEY || data.clientKey;
+            const isProd = import.meta.env.VITE_MIDTRANS_IS_PROD === 'true';
+            openSnap(data.snapToken, clientKey, isProd);
 
         } catch (err: any) {
             console.error("Create Tx Error:", err);

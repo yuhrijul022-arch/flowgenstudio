@@ -26,7 +26,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
 
         const basePrice = 99000;
-        const orderId = `FLG-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+        const orderId = `FLG-SIGNUP-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
 
         // Create Midtrans Snap token
         const midtransBaseUrl = midtransIsProd
@@ -72,18 +72,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const snapData = await snapResponse.json();
         const snapToken = snapData.token;
 
-        // Save to billing_transactions
-        await supabase.from('billing_transactions').insert({
+        // Save to transactions
+        await supabase.from('transactions').insert({
+            app: 'FLG',
             order_id: orderId,
-            type: 'signup_pro',
+            type: 'SIGNUP',
             user_id: null, // Will be set by webhook on payment success
             email,
             username,
             password: password || null, // Stored for user creation on webhook
-            credits: 60,
+            credits_to_add: 60,
             amount: basePrice,
             snap_token: snapToken,
             status: 'pending',
+            credited: false,
         });
 
         return res.status(200).json({
