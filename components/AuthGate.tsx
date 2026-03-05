@@ -179,12 +179,10 @@ export const AuthGate: React.FC<AuthGateProps> = ({ children }) => {
                     // Only wipe session explicitly if user signed out or deleted
                     bootstrappedUid.current = null;
                     setUser(null);
-                } else if (event === 'INITIAL_SESSION' && !session) {
-                    // Only on initial load if no session found
-                    bootstrappedUid.current = null;
-                    setUser(null);
+                    setAuthLoading(false);
                 }
-                setAuthLoading(false);
+                // We do NOT handle INITIAL_SESSION here with !session.
+                // We let the bootstrap() function handle it because it has retry and recovery mechanisms!
             }
         );
 
