@@ -70,6 +70,10 @@ ALTER TABLE public.transactions
     ADD COLUMN IF NOT EXISTS credited_at TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS raw_notification JSONB;
 
+-- Add indexes for performance
+CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON public.transactions(user_id);
+CREATE INDEX IF NOT EXISTS idx_transactions_order_id ON public.transactions(order_id);
+
 -- Drop old CHECK constraint on status if it exists (from billing_transactions or old schema)
 DO $$
 DECLARE
@@ -157,7 +161,29 @@ BEGIN
 END $$;
 
 -- ==============================
--- 6. GENERATION RATE LIMITS (Rate limit + failure tracking + concurrency lock)
+-- 6. RPC: ATOMIC CREDIT UPDATE
+-- ==============================
+CREATE OR REPLACE FUNCTION public.increment_user_credits(user_uuid UUID, credit_amount INTEGER)
+RETURNS INTEGER 
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+    new_credits INTEGER;
+BEGIN
+    UPDATE public.users 
+    SET 
+        credits = credits + credit_amount,
+        updated_at = NOW()
+    WHERE id = user_uuid
+    RETURNING credits INTO new_credits;
+    
+    RETURN new_credits;
+END;
+$$;
+
+-- ==============================
+-- 7. GENERATION RATE LIMITS (Rate limit + failure tracking + concurrency lock)
 -- ==============================
 CREATE TABLE IF NOT EXISTS public.generation_rate_limits (
     user_id UUID PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,

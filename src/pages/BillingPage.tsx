@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../lib/supabaseClient';
 import { useNavigate } from 'react-router-dom';
 import { formatIDR } from '../utils/currency';
 import { useToast } from '../components/ui/ToastProvider';

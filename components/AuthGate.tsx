@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { supabase } from '../src/lib/supabase';
+import { supabase } from '../src/lib/supabaseClient';
 import { ensureUserRow, toAppUser } from '../src/lib/auth';
 import { LoginPage } from './LoginPage';
 import { AppUser } from '../types';
@@ -43,6 +43,7 @@ interface AuthGateProps {
 export const AuthGate: React.FC<AuthGateProps> = ({ children }) => {
     const [user, setUser] = useState<AppUser | null>(null);
     const [authLoading, setAuthLoading] = useState(true);
+    const [bootState, setBootState] = useState<'APP_BOOT' | 'SESSION_CHECK' | 'SESSION_RESTORE' | 'AUTH_READY'>('APP_BOOT');
     const [signInLoading, setSignInLoading] = useState(false);
     const [recoveryAttempted, setRecoveryAttempted] = useState(false);
     const bootstrappedUid = useRef<string | null>(null);
@@ -51,13 +52,11 @@ export const AuthGate: React.FC<AuthGateProps> = ({ children }) => {
     useEffect(() => {
         console.log('[AuthGate] app_boot: starting auth bootstrap');
 
-        let timeoutId: ReturnType<typeof setTimeout>;
         let resolved = false;
 
         const resolveAuth = (sessionUser: SupabaseUser | null) => {
             if (resolved) return;
             resolved = true;
-            clearTimeout(timeoutId);
 
             if (sessionUser) {
                 const appUser = toAppUser(sessionUser);
@@ -75,46 +74,91 @@ export const AuthGate: React.FC<AuthGateProps> = ({ children }) => {
             setAuthLoading(false);
         };
 
-        // Attempt to get session with timeout protection
         const bootstrap = async () => {
+            console.log('[AuthGate] state: APP_BOOT');
+            setBootState('APP_BOOT');
+
             try {
-                const { data: { session }, error } = await supabase.auth.getSession();
+                console.log('[AuthGate] state: SESSION_CHECK');
+                setBootState('SESSION_CHECK');
+                // strict getSession within 5 seconds using Promise.race
+                const sessionPromise = supabase.auth.getSession();
+                const timeoutPromise = new Promise<{ data: { session: null }; error: Error }>((_, reject) =>
+                    setTimeout(() => reject(new Error('SessionTimeout')), AUTH_TIMEOUT_MS)
+                );
+
+                const { data: { session }, error } = await Promise.race([sessionPromise, timeoutPromise]);
+
                 if (error) {
                     console.error('[AuthGate] session_failed:', error.message);
-                    // Try self-healing
-                    if (!recoveryAttempted) {
-                        console.log('[AuthGate] recovery_triggered: clearing corrupted storage');
-                        clearCorruptedAuthStorage();
-                        setRecoveryAttempted(true);
-                        // Try once more
-                        const { data: { session: retrySession } } = await supabase.auth.getSession();
-                        resolveAuth(retrySession?.user ?? null);
+
+                    console.log('[AuthGate] state: SESSION_RESTORE');
+                    setBootState('SESSION_RESTORE');
+                    // Fallback to refreshSession()
+                    const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+
+                    if (refreshError || !refreshData.session) {
+                        console.error('[AuthGate] refreshSession failed:', refreshError);
+
+                        if (!recoveryAttempted) {
+                            console.log('[AuthGate] recovery_triggered: clearing corrupted storage');
+                            clearCorruptedAuthStorage();
+                            setRecoveryAttempted(true);
+                            // Try once more after wiping corrupted data
+                            const { data: { session: retrySession } } = await supabase.auth.getSession();
+                            console.log('[AuthGate] state: AUTH_READY');
+                            setBootState('AUTH_READY');
+                            resolveAuth(retrySession?.user ?? null);
+                            return;
+                        }
+
+                        console.log('[AuthGate] state: AUTH_READY');
+                        setBootState('AUTH_READY');
+                        resolveAuth(null);
                         return;
                     }
-                    resolveAuth(null);
+
+                    // Refresh succeeded!
+                    console.log('[AuthGate] state: AUTH_READY');
+                    setBootState('AUTH_READY');
+                    resolveAuth(refreshData.session.user);
                     return;
                 }
+
+                console.log('[AuthGate] state: AUTH_READY');
+                setBootState('AUTH_READY');
                 resolveAuth(session?.user ?? null);
-            } catch (err) {
-                console.error('[AuthGate] session_failed (exception):', err);
+            } catch (err: any) {
+                console.error('[AuthGate] bootstrap_failed (exception):', err);
+                if (err.message === 'SessionTimeout') {
+                    console.warn('[AuthGate] auth_timeout: session load exceeded 5s, falling back');
+                }
+
+                console.log('[AuthGate] state: SESSION_RESTORE (recovery)');
+                setBootState('SESSION_RESTORE');
+
                 if (!recoveryAttempted) {
                     console.log('[AuthGate] recovery_triggered: clearing storage after exception');
                     clearCorruptedAuthStorage();
                     setRecoveryAttempted(true);
+
+                    // Final attempt after exception
+                    const { data: { session: retrySession } } = await supabase.auth.getSession();
+                    console.log('[AuthGate] state: AUTH_READY');
+                    setBootState('AUTH_READY');
+                    resolveAuth(retrySession?.user ?? null);
+                    return;
                 }
+
+                console.log('[AuthGate] state: AUTH_READY');
+                setBootState('AUTH_READY');
                 resolveAuth(null);
             }
         };
 
-        // Timeout protection: if bootstrap takes > 5s, give up and show login
-        timeoutId = setTimeout(() => {
-            if (!resolved) {
-                console.warn('[AuthGate] auth_timeout: session load exceeded 5s, falling back');
-                resolveAuth(null);
-            }
-        }, AUTH_TIMEOUT_MS);
-
-        bootstrap();
+        if (bootState === 'APP_BOOT') {
+            bootstrap();
+        }
 
         // ── AUTH STATE CHANGE LISTENER ──
         const { data: { subscription } } = supabase.auth.onAuthStateChange(
@@ -145,7 +189,6 @@ export const AuthGate: React.FC<AuthGateProps> = ({ children }) => {
         );
 
         return () => {
-            clearTimeout(timeoutId);
             subscription.unsubscribe();
         };
     }, [recoveryAttempted]);
@@ -156,18 +199,13 @@ export const AuthGate: React.FC<AuthGateProps> = ({ children }) => {
             if (document.visibilityState === 'visible') {
                 console.log('[AuthGate] tab_visible: refreshing session');
                 try {
-                    const { data: { session }, error } = await supabase.auth.getSession();
+                    const { data: { session }, error } = await supabase.auth.refreshSession();
 
-                    // Do NOT logout on network error. Only on valid response with no session.
                     if (error) {
-                        console.error('[AuthGate] visibility_getSession_error:', error);
-                        // Network error, don't clear session yet
-                    } else if (!session?.user) {
-                        // Session actually expired from another tab
-                        console.log('[AuthGate] session_expired_on_return');
-                        bootstrappedUid.current = null;
-                        setUser(null);
-                    } else {
+                        console.error('[AuthGate] visibility_refreshSession_error:', error);
+                        // Do not aggressively log the user out here (prevents viewport change logouts)
+                        // Just log the error. The standard auth listener will catch a true SIGNED_OUT event.
+                    } else if (session?.user) {
                         // Session valid — update user state
                         setUser(toAppUser(session.user));
                     }
@@ -178,7 +216,6 @@ export const AuthGate: React.FC<AuthGateProps> = ({ children }) => {
         };
 
         document.addEventListener('visibilitychange', handleVisibilityChange);
-        // Also listen to window focus as a fallback
         window.addEventListener('focus', handleVisibilityChange);
         return () => {
             document.removeEventListener('visibilitychange', handleVisibilityChange);

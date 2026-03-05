@@ -1,13 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '../src/lib/supabaseClient';
 
-const supabaseUrl = process.env.SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const midtransServerKey = process.env.MIDTRANS_SERVER_KEY!;
 const midtransClientKey = process.env.MIDTRANS_CLIENT_KEY!;
 const midtransIsProd = process.env.MIDTRANS_IS_PROD === 'true';
-
-let supabase: ReturnType<typeof createClient>;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
     // CORS
@@ -19,12 +15,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
     try {
-        if (!supabaseUrl || !supabaseServiceKey) {
-            console.error('Missing Supabase Environment Variables in Vercel');
-            return res.status(500).json({ error: 'Server configuration error: Missing Supabase keys.' });
-        }
         if (!supabase) {
-            supabase = createClient(supabaseUrl, supabaseServiceKey);
+            console.error('Missing Supabase Client Configuration');
+            return res.status(500).json({ error: 'Server configuration error: Missing Supabase keys.' });
         }
 
 

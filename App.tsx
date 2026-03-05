@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AppUser, AspectRatio, ImageQuality } from './types';
 import { FileUpload } from './components/FileUpload';
 import { StylePresetCard } from './components/StylePresetCard';
@@ -29,7 +29,7 @@ interface AppProps {
 }
 
 export const App: React.FC<AppProps> = ({ user }) => {
-    const { available: availableCredits, loading: creditsLoading } = useCredits(user.uid);
+    const { available: availableCredits, loading: creditsLoading, refresh: refreshCredits } = useCredits(user.uid);
     const { toast } = useToast();
     const [quotaModal, setQuotaModal] = useState(false);
     const [topUpModalOpen, setTopUpModalOpen] = useState(false);
@@ -574,6 +574,8 @@ export const App: React.FC<AppProps> = ({ user }) => {
             <TopUpModal
                 isOpen={topUpModalOpen}
                 onClose={() => setTopUpModalOpen(false)}
+                currentCredits={availableCredits}
+                onSuccess={refreshCredits}
             />
         </div>
     );

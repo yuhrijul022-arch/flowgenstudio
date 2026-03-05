@@ -1,24 +1,16 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { createClient } from '@supabase/supabase-js';
+import { supabase } from '../src/lib/supabaseClient';
 import { createHash } from 'crypto';
 
-const supabaseUrl = process.env.SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const midtransServerKey = process.env.MIDTRANS_SERVER_KEY!;
-
-let supabase: ReturnType<typeof createClient>;
-
 export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === 'OPTIONS') return res.status(200).send('OK');
     if (req.method !== 'POST') return res.status(200).send('OK');
 
     try {
-        if (!supabaseUrl || !supabaseServiceKey) {
-            console.error('Webhook Error: Missing Supabase Environment Variables in Vercel');
-            return res.status(200).send('OK: Missing Config'); // Return 200 to prevent Midtrans retry spam
-        }
         if (!supabase) {
-            supabase = createClient(supabaseUrl, supabaseServiceKey);
+            console.error('Webhook Error: Missing Supabase Client Configuration');
+            return res.status(200).send('OK: Missing Config'); // Return 200 to prevent Midtrans retry spam
         }
         const notification = req.body;
         if (!notification || !notification.order_id) {
@@ -149,29 +141,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     raw_notification: notification
                 };
                 // @ts-ignore
-                await supabase.from('transactions').update(failPayload).eq('order_id', rawOrderId);
+                await supabase.from('transactions').update(failPayload as never).eq('order_id', rawOrderId);
                 return res.status(200).send('OK: No user to credit');
             }
 
-            // Get current user credits
+            // Get current user to check existence
             const { data: currentUser } = await supabase
                 .from('users')
-                .select('credits, pro_active')
+                .select('id, pro_active')
                 .eq('id', userId)
                 .single();
 
-            const newCredits = ((currentUser as any)?.credits || 0) + creditsToAdd;
-            const updateData: any = { credits: newCredits, updated_at: new Date().toISOString() };
-
-            if (type === 'SIGNUP') {
-                updateData.pro_active = true;
-            }
-
-            // Update user
+            // @ts-ignore
             if (currentUser) {
-                // @ts-ignore
-                await supabase.from('users').update(updateData as any).eq('id', userId);
+                // Atomic increment using RPC
+                const { error: rpcErr } = await supabase.rpc('increment_user_credits', {
+                    user_uuid: userId,
+                    credit_amount: creditsToAdd
+                } as any);
+
+                if (rpcErr) {
+                    console.error('RPC increment_user_credits error:', rpcErr);
+                }
+
+                // Update pro_active separately if needed
+                if (type === 'SIGNUP') {
+                    // @ts-ignore
+                    await supabase.from('users').update({ pro_active: true }).eq('id', userId);
+                }
             } else {
+                // User doesn't exist, create via upsert
                 const newUserPayload: any = {
                     id: userId,
                     app: app,
@@ -205,7 +204,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 transaction_id: (txData as any).id,
                 payload: notification
             };
-            await supabase.from('processed_notifications').insert(notifPayload as never);
+            await supabase.from('processed_notifications').insert(notifPayload as any);
 
             console.log('Credits applied:', { orderId: rawOrderId, userId, creditsToAdd, app, type });
 

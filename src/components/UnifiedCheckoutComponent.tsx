@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useToast } from './ui/ToastProvider';
 import { Icon } from '../../components/Icon';
 import { formatIDR } from '../utils/currency';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../lib/supabaseClient';
 
 interface CreateTxResponse {
     snapToken: string;
@@ -47,9 +47,18 @@ export const UnifiedCheckoutComponent: React.FC = () => {
         setForm(prev => ({ ...prev, [key]: val }));
     };
 
-    const openSnap = (token: string, clientKey: string, isProd: boolean, userId: string) => {
+    const openSnap = async (token: string, clientKey: string, isProd: boolean, userId: string) => {
         const scriptId = 'midtrans-script';
         let script = document.getElementById(scriptId) as HTMLScriptElement;
+
+        // Fetch current credits before polling
+        let startingCredits = 0;
+        try {
+            const { data } = await supabase.from('users').select('credits').eq('id', userId).single();
+            startingCredits = data ? (data as any).credits : 0;
+        } catch (e) {
+            console.error('Failed to fetch initial credits', e);
+        }
 
         const pollAndRedirect = async () => {
             toast({ type: 'info', title: 'Memverifikasi', description: 'Memeriksa status pembayaran & menambahkan credits...' });
@@ -64,7 +73,7 @@ export const UnifiedCheckoutComponent: React.FC = () => {
                 }
                 try {
                     const { data } = await supabase.from('users').select('credits').eq('id', userId).single();
-                    if (data && (data as any).credits > 0) {
+                    if (data && (data as any).credits > startingCredits) {
                         clearInterval(interval);
                         toast({ type: 'success', title: 'Sukses!', description: `Pembayaran berhasil! Credits kamu: ${(data as any).credits}` });
                         navigate('/');
@@ -159,6 +168,10 @@ export const UnifiedCheckoutComponent: React.FC = () => {
 
             // STEP 2: Create Transaction with Authorized token
             const baseUrl = import.meta.env.PROD ? '' : (import.meta.env.VITE_BASE_URL || '');
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
+
             const response = await fetch(`${baseUrl}/api/create-transaction`, {
                 method: 'POST',
                 headers: {
@@ -170,7 +183,9 @@ export const UnifiedCheckoutComponent: React.FC = () => {
                     username: form.username,
                     promoCode: form.promoCode,
                 }),
+                signal: controller.signal,
             });
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 const errData = await response.json().catch(() => null);
@@ -183,11 +198,12 @@ export const UnifiedCheckoutComponent: React.FC = () => {
             const isProd = import.meta.env.VITE_MIDTRANS_IS_PROD === 'true';
 
             const userId = sessionResponse.data.session?.user?.id || '';
-            openSnap(data.snapToken, clientKey, isProd, userId);
+            await openSnap(data.snapToken, clientKey, isProd, userId);
 
         } catch (err: any) {
             console.error("Create Tx Error:", err);
-            toast({ type: 'error', title: 'Kesalahan', description: err.message || 'Gagal membuat transaksi. Coba lagi sebentar.' });
+            const msg = err.name === 'AbortError' ? 'Koneksi timeout. Silakan coba lagi.' : (err.message || 'Gagal membuat transaksi. Coba lagi sebentar.');
+            toast({ type: 'error', title: 'Kesalahan', description: msg });
         } finally {
             setLoading(false);
         }
@@ -304,7 +320,7 @@ export const UnifiedCheckoutComponent: React.FC = () => {
                                     onClick={async () => {
                                         const { data } = await supabase.auth.getSession();
                                         const userId = data.session?.user?.id || '';
-                                        openSnap(pendingToken, pendingClientKey, pendingIsProd, userId);
+                                        await openSnap(pendingToken, pendingClientKey, pendingIsProd, userId);
                                     }}
                                     className="w-full py-4 rounded-xl font-medium text-[15px] transition-all flex items-center justify-center gap-2 mt-3 bg-[#0071e3] text-white hover:bg-[#005bb5] shadow-lg shadow-[#0071e3]/20 active:scale-[0.98]"
                                 >

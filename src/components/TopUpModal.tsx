@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../lib/supabaseClient';
 import { useToast } from './ui/ToastProvider';
 import { Icon } from '../../components/Icon';
 import { formatIDR } from '../utils/currency';
@@ -7,6 +7,8 @@ import { formatIDR } from '../utils/currency';
 interface TopUpModalProps {
     isOpen: boolean;
     onClose: () => void;
+    currentCredits: number;
+    onSuccess?: () => void;
 }
 
 const TOPUP_PACKAGES = [
@@ -16,7 +18,7 @@ const TOPUP_PACKAGES = [
     { credits: 100, price: 200000 },
 ];
 
-export const TopUpModal: React.FC<TopUpModalProps> = ({ isOpen, onClose }) => {
+export const TopUpModal: React.FC<TopUpModalProps> = ({ isOpen, onClose, currentCredits, onSuccess }) => {
     const { toast } = useToast();
     const [selectedPackage, setSelectedPackage] = useState<number | null>(null);
     const [customQty, setCustomQty] = useState<string>('');
@@ -41,6 +43,10 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({ isOpen, onClose }) => {
             }
 
             const baseUrl = import.meta.env.PROD ? '' : (import.meta.env.VITE_BASE_URL || '');
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
+
             const response = await fetch(`${baseUrl}/api/topup`, {
                 method: 'POST',
                 headers: {
@@ -48,7 +54,9 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({ isOpen, onClose }) => {
                     'Authorization': `Bearer ${session.access_token}`,
                 },
                 body: JSON.stringify({ creditsQty: finalQty }),
+                signal: controller.signal,
             });
+            clearTimeout(timeoutId);
 
             if (!response.ok) {
                 const errData = await response.json().catch(() => null);
@@ -81,14 +89,16 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({ isOpen, onClose }) => {
                     if (attempts > 15) { // 30 seconds
                         clearInterval(interval);
                         toast({ type: 'success', title: 'Pembayaran Diterima', description: 'Credits akan masuk dalam beberapa saat.' });
+                        if (onSuccess) onSuccess();
                         onClose();
                         return;
                     }
                     try {
                         const { data } = await supabase.from('users').select('credits').eq('id', userId).single();
-                        if (data && (data as any).credits > 0) {
+                        if (data && (data as any).credits > currentCredits) {
                             clearInterval(interval);
                             toast({ type: 'success', title: 'Top Up Berhasil!', description: `Credits kamu sekarang: ${(data as any).credits}` });
+                            if (onSuccess) onSuccess();
                             onClose();
                         }
                     } catch (e) {
@@ -116,7 +126,8 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({ isOpen, onClose }) => {
 
         } catch (error: any) {
             console.error("TopUp Error:", error);
-            toast({ type: 'error', title: 'Gagal', description: error.message || 'Gagal membuat transaksi topup.' });
+            const msg = error.name === 'AbortError' ? 'Koneksi timeout. Silakan coba lagi.' : (error.message || 'Gagal membuat transaksi topup.');
+            toast({ type: 'error', title: 'Gagal', description: msg });
         } finally {
             setIsLoading(false);
         }

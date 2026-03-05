@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from './supabase';
+import { supabase } from './supabaseClient';
 
 interface CreditState {
     credits: number;
     available: number;
     loading: boolean;
     refresh: () => Promise<void>;
+    startFastPolling: () => void;
 }
 
 const CREDITS_FETCH_TIMEOUT = 10_000; // 10 seconds max
@@ -13,6 +14,8 @@ const CREDITS_FETCH_TIMEOUT = 10_000; // 10 seconds max
 export function useCredits(uid: string | null): CreditState {
     const [credits, setCredits] = useState(0);
     const [loading, setLoading] = useState(true);
+
+    const [fastPolling, setFastPolling] = useState(false);
 
     const fetchCredits = useCallback(async () => {
         if (!uid) {
@@ -35,20 +38,27 @@ export function useCredits(uid: string | null): CreditState {
             ]);
 
             if (result.data && !result.error) {
-                setCredits((result.data as any).credits ?? 0);
+                const newCredits = (result.data as any).credits ?? 0;
+                setCredits((prev) => {
+                    if (fastPolling && newCredits > prev) {
+                        // Value increased, stop fast polling
+                        setFastPolling(false);
+                    }
+                    return newCredits;
+                });
             }
         } catch (e) {
             console.warn('[Credits] fetch error:', e);
             // Don't reset credits on error — keep last known value
         }
         setLoading(false);
-    }, [uid]);
+    }, [uid, fastPolling]);
 
     useEffect(() => {
         fetchCredits();
 
-        // Simple polling every 30 seconds
-        const interval = setInterval(fetchCredits, 30000);
+        // Standard polling every 30 seconds, or 3 seconds if fastPolling is active
+        const interval = setInterval(fetchCredits, fastPolling ? 3000 : 30000);
 
         // Loading guard: force exit loading after 5 seconds
         const guard = setTimeout(() => setLoading(false), 5000);
@@ -63,7 +73,13 @@ export function useCredits(uid: string | null): CreditState {
                     (payload) => {
                         console.log('[Credits] Realtime update:', payload.new);
                         if (payload.new && 'credits' in payload.new) {
-                            setCredits(Number(payload.new.credits));
+                            setCredits((prev) => {
+                                const newCredits = Number(payload.new.credits);
+                                if (fastPolling && newCredits > prev) {
+                                    setFastPolling(false);
+                                }
+                                return newCredits;
+                            });
                         }
                     }
                 )
@@ -75,12 +91,13 @@ export function useCredits(uid: string | null): CreditState {
             clearTimeout(guard);
             if (channel) supabase.removeChannel(channel);
         };
-    }, [uid, fetchCredits]);
+    }, [uid, fetchCredits, fastPolling]);
 
     return {
         credits,
         available: credits,
         loading,
         refresh: fetchCredits,
+        startFastPolling: () => setFastPolling(true),
     };
 }
