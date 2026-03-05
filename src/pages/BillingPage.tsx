@@ -48,33 +48,18 @@ export const BillingPage: React.FC = () => {
             }
             setLoading(false);
 
-            // Subscribe to realtime changes
-            const channel = supabase
-                .channel(`billing-${uid}`)
-                .on(
-                    'postgres_changes',
-                    {
-                        event: '*',
-                        schema: 'public',
-                        table: 'transactions',
-                        filter: `user_id=eq.${uid}`,
-                    },
-                    () => {
-                        // Refetch on any change
-                        supabase
-                            .from('transactions')
-                            .select('*')
-                            .eq('user_id', uid)
-                            .order('created_at', { ascending: false })
-                            .then(({ data }) => {
-                                if (data) setTransactions(data);
-                            });
-                    }
-                )
-                .subscribe();
+            // Poll for transaction updates every 30 seconds instead of Realtime WebSocket
+            const pollInterval = setInterval(async () => {
+                const { data: freshData } = await supabase
+                    .from('transactions')
+                    .select('*')
+                    .eq('user_id', uid)
+                    .order('created_at', { ascending: false });
+                if (freshData) setTransactions(freshData);
+            }, 30000);
 
             return () => {
-                supabase.removeChannel(channel);
+                clearInterval(pollInterval);
             };
         };
 

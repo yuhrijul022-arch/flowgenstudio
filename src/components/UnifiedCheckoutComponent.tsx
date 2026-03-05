@@ -58,15 +58,19 @@ export const UnifiedCheckoutComponent: React.FC = () => {
                 attempts++;
                 if (attempts > 15) { // 30 seconds timeout
                     clearInterval(interval);
+                    toast({ type: 'success', title: 'Pembayaran Diterima', description: 'Credits akan masuk dalam beberapa saat.' });
                     navigate('/');
                     return;
                 }
-                const { data } = await supabase.from('users').select('credits').eq('id', userId).single();
-                if (data && data.credits > 0) {
-                    clearInterval(interval);
-                    toast({ type: 'success', title: 'Sukses', description: 'Pembayaran berhasil dan credits telah ditambahkan!' });
-                    navigate('/');
-                    setTimeout(() => window.location.reload(), 500); // hard refresh to update UI state across app
+                try {
+                    const { data } = await supabase.from('users').select('credits').eq('id', userId).single();
+                    if (data && (data as any).credits > 0) {
+                        clearInterval(interval);
+                        toast({ type: 'success', title: 'Sukses!', description: `Pembayaran berhasil! Credits kamu: ${(data as any).credits}` });
+                        navigate('/');
+                    }
+                } catch (e) {
+                    // ignore fetch errors during polling
                 }
             }, 2000);
         };

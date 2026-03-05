@@ -85,6 +85,10 @@ BEGIN
     END LOOP;
 END $$;
 
+-- Clean up any rows with invalid status values from previous webhook runs
+UPDATE public.transactions SET status = 'success' WHERE status = 'paid';
+UPDATE public.transactions SET status = 'pending' WHERE status NOT IN ('pending', 'success', 'failed', 'expired');
+
 -- Add updated CHECK constraint that includes 'success'
 ALTER TABLE public.transactions ADD CONSTRAINT transactions_status_check
     CHECK (status IN ('pending', 'success', 'failed', 'expired'));

@@ -1,25 +1,24 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from './supabase';
 
 interface CreditState {
     credits: number;
     available: number;
     loading: boolean;
+    refresh: () => Promise<void>;
 }
 
 export function useCredits(uid: string | null): CreditState {
     const [credits, setCredits] = useState(0);
     const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
+    const fetchCredits = useCallback(async () => {
         if (!uid) {
             setCredits(0);
             setLoading(false);
             return;
         }
-
-        // Initial fetch
-        const fetchCredits = async () => {
+        try {
             const { data, error } = await supabase
                 .from('users')
                 .select('credits')
@@ -27,41 +26,30 @@ export function useCredits(uid: string | null): CreditState {
                 .single();
 
             if (data && !error) {
-                setCredits(data.credits ?? 0);
+                setCredits((data as any).credits ?? 0);
             }
-            setLoading(false);
-        };
+        } catch (e) {
+            console.warn('Credits fetch error:', e);
+        }
+        setLoading(false);
+    }, [uid]);
 
+    useEffect(() => {
         fetchCredits();
 
-        // Subscribe to realtime changes on this user's row
-        const channel = supabase
-            .channel(`credits-${uid}`)
-            .on(
-                'postgres_changes',
-                {
-                    event: 'UPDATE',
-                    schema: 'public',
-                    table: 'users',
-                    filter: `id=eq.${uid}`,
-                },
-                (payload) => {
-                    const newCredits = (payload.new as any)?.credits;
-                    if (typeof newCredits === 'number') {
-                        setCredits(newCredits);
-                    }
-                }
-            )
-            .subscribe();
+        // Simple polling every 30 seconds instead of Realtime WebSocket
+        // This avoids the ws://localhost:8081 connection error
+        const interval = setInterval(fetchCredits, 30000);
 
         return () => {
-            supabase.removeChannel(channel);
+            clearInterval(interval);
         };
-    }, [uid]);
+    }, [uid, fetchCredits]);
 
     return {
         credits,
         available: credits,
         loading,
+        refresh: fetchCredits,
     };
 }

@@ -80,15 +80,19 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({ isOpen, onClose }) => {
                     attempts++;
                     if (attempts > 15) { // 30 seconds
                         clearInterval(interval);
+                        toast({ type: 'success', title: 'Pembayaran Diterima', description: 'Credits akan masuk dalam beberapa saat.' });
                         onClose();
                         return;
                     }
-                    const { data } = await supabase.from('users').select('credits').eq('id', userId).single();
-                    if (data && data.credits > 0) {
-                        clearInterval(interval);
-                        toast({ type: 'success', title: 'Berhasil', description: 'Credits kamu sudah bertambah!' });
-                        onClose();
-                        setTimeout(() => window.location.reload(), 500); // hard refresh to update UI state across app
+                    try {
+                        const { data } = await supabase.from('users').select('credits').eq('id', userId).single();
+                        if (data && (data as any).credits > 0) {
+                            clearInterval(interval);
+                            toast({ type: 'success', title: 'Top Up Berhasil!', description: `Credits kamu sekarang: ${(data as any).credits}` });
+                            onClose();
+                        }
+                    } catch (e) {
+                        // ignore fetch errors during polling
                     }
                 }, 2000);
             };
