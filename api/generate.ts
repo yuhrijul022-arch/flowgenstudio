@@ -8,7 +8,27 @@ const imageModel = process.env.OPENROUTER_IMAGE_MODEL || 'google/gemini-2.5-flas
 
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-// ── Prompt builder (same prompts from original geminiService / runGeneration) ──
+// ── Config ──
+const RATE_LIMIT_MAX = 5;          // max generations per window
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+const FAIL_MAX = 5;                // max failures before cooldown
+const FAIL_WINDOW_MS = 600_000;    // 10 minutes
+const COOLDOWN_MS = 180_000;       // 3 minutes cooldown
+const TIMEOUT_MS = 30_000;         // 30 seconds API timeout
+const MIN_INTERVAL_MS = 3_000;     // 3 seconds between requests
+
+// ── Bot detection ──
+const BOT_PATTERNS = [
+    /bot/i, /crawl/i, /spider/i, /curl/i, /wget/i, /python-requests/i,
+    /go-http-client/i, /scrapy/i, /httpclient/i, /libwww/i
+];
+
+function isBot(userAgent: string | undefined): boolean {
+    if (!userAgent || userAgent.length < 10) return true;
+    return BOT_PATTERNS.some(p => p.test(userAgent));
+}
+
+// ── Prompt builder ──
 const PRESETS: Record<string, { name: string; description: string }> = {
     "ecommerce-white": { name: "Studio White", description: "Clean pure white background, soft even lighting, professional commercial photography, crystal clear details, no distractions." },
     "fnb-gourmet": { name: "Gourmet", description: "Warm wooden table setting, appetizing restaurant lighting, shallow depth of field, fresh ingredients in background, delicious atmosphere." },
@@ -99,6 +119,34 @@ function parseBase64(dataUri: string): { data: string; mimeType: string } {
     return { data: dataUri, mimeType: "image/png" };
 }
 
+// ── Rate limit helpers ──
+async function getRateLimitData(uid: string) {
+    const { data } = await supabase
+        .from('generation_rate_limits')
+        .select('*')
+        .eq('user_id', uid)
+        .single();
+    return data as any;
+}
+
+async function upsertRateLimitData(uid: string, updates: Record<string, any>) {
+    await supabase
+        .from('generation_rate_limits')
+        .upsert({ user_id: uid, ...updates, updated_at: new Date().toISOString() } as never, { onConflict: 'user_id' } as any);
+}
+
+// ── Fetch with timeout using AbortController ──
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        return response;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === 'OPTIONS') {
         res.setHeader('Access-Control-Allow-Origin', '*');
@@ -114,7 +162,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader('Access-Control-Allow-Origin', '*');
 
     try {
-        // 1. Verify auth
+        // ── BOT PROTECTION ──
+        const userAgent = req.headers['user-agent'] as string | undefined;
+        if (isBot(userAgent)) {
+            console.log('[Generate] BOT_BLOCKED:', userAgent?.substring(0, 80));
+            return res.status(403).json({ error: 'Forbidden' });
+        }
+
+        // ── AUTH CHECK ──
         const authHeader = req.headers.authorization;
         if (!authHeader?.startsWith('Bearer ')) {
             return res.status(401).json({ error: 'Missing auth token' });
@@ -133,7 +188,63 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         const numImages = Math.min(Math.max(Number(qty) || 1, 1), 10);
 
-        // 2. Check credits
+        // ── GET RATE LIMIT DATA ──
+        let rateData = await getRateLimitData(uid);
+        const now = Date.now();
+
+        // ── CONCURRENT GENERATION GUARD ──
+        if (rateData?.is_generating) {
+            console.log(`[Generate] CONCURRENT_BLOCKED: user=${uid}`);
+            return res.status(429).json({
+                error: 'Kamu masih punya proses generate yang berjalan. Tunggu selesai dulu.',
+                retryAfter: 10
+            });
+        }
+
+        // ── MIN INTERVAL CHECK (3s between requests) ──
+        if (rateData?.request_timestamps?.length > 0) {
+            const lastRequest = new Date(rateData.request_timestamps[rateData.request_timestamps.length - 1]).getTime();
+            if (now - lastRequest < MIN_INTERVAL_MS) {
+                console.log(`[Generate] INTERVAL_BLOCKED: user=${uid}, gap=${now - lastRequest}ms`);
+                return res.status(429).json({
+                    error: 'Server sedang sibuk, coba beberapa saat lagi.',
+                    retryAfter: 3
+                });
+            }
+        }
+
+        // ── RATE LIMIT CHECK (max 5 per minute) ──
+        if (rateData?.request_timestamps) {
+            const windowStart = now - RATE_LIMIT_WINDOW_MS;
+            const recentRequests = (rateData.request_timestamps as string[])
+                .filter((ts: string) => new Date(ts).getTime() > windowStart);
+            if (recentRequests.length >= RATE_LIMIT_MAX) {
+                console.log(`[Generate] RATE_LIMITED: user=${uid}, count=${recentRequests.length}`);
+                return res.status(429).json({
+                    error: 'Batas generate tercapai (maks 5 per menit). Coba beberapa saat lagi.',
+                    retryAfter: 60
+                });
+            }
+        }
+
+        // ── FAILURE COOLDOWN CHECK ──
+        if (rateData?.fail_count >= FAIL_MAX && rateData?.last_fail_at) {
+            const lastFail = new Date(rateData.last_fail_at).getTime();
+            const timeSinceLastFail = now - lastFail;
+            if (timeSinceLastFail < COOLDOWN_MS) {
+                const remainingSec = Math.ceil((COOLDOWN_MS - timeSinceLastFail) / 1000);
+                console.log(`[Generate] COOLDOWN_BLOCKED: user=${uid}, remaining=${remainingSec}s`);
+                return res.status(429).json({
+                    error: `Server sedang sibuk. Coba lagi dalam ${remainingSec} detik.`,
+                    retryAfter: remainingSec
+                });
+            }
+            // Cooldown expired, reset fail count
+            await upsertRateLimitData(uid, { fail_count: 0, last_fail_at: null });
+            rateData = { ...rateData, fail_count: 0, last_fail_at: null };
+        }
+
+        // ── CREDIT CHECK ──
         const { data: userData, error: userError } = await supabase
             .from('users')
             .select('credits')
@@ -144,16 +255,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             return res.status(404).json({ error: 'User not found.' });
         }
 
-        if (userData.credits < numImages) {
-            return res.status(402).json({ error: `Insufficient credits. Available: ${userData.credits}, required: ${numImages}` });
+        if ((userData as any).credits < numImages) {
+            return res.status(402).json({
+                error: `Credit tidak cukup. Tersedia: ${(userData as any).credits}, dibutuhkan: ${numImages}`
+            });
         }
 
-        // 3. Build prompt
+        // ── ALL CHECKS PASSED — SET GENERATING LOCK ──
+        const currentTimestamps = (rateData?.request_timestamps || []) as string[];
+        const windowStart = now - RATE_LIMIT_WINDOW_MS;
+        const filteredTimestamps = currentTimestamps.filter((ts: string) => new Date(ts).getTime() > windowStart);
+        filteredTimestamps.push(new Date().toISOString());
+
+        await upsertRateLimitData(uid, {
+            is_generating: true,
+            request_timestamps: filteredTimestamps,
+        });
+
+        console.log(`[Generate] STARTED: user=${uid}, qty=${numImages}, model=${imageModel}`);
+
+        // ── BUILD PROMPT ──
         const promptText = buildPrompt(preset, customPrompt, !!referenceImage, productImages.length);
 
-        // 4. Build OpenRouter content parts
+        // ── BUILD CONTENT PARTS ──
         const contentParts: any[] = [];
-
         for (const img of productImages) {
             const { data, mimeType } = parseBase64(img);
             contentParts.push({
@@ -161,7 +286,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 image_url: { url: `data:${mimeType};base64,${data}` }
             });
         }
-
         if (referenceImage) {
             const { data, mimeType } = parseBase64(referenceImage);
             contentParts.push({
@@ -169,31 +293,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 image_url: { url: `data:${mimeType};base64,${data}` }
             });
         }
-
         contentParts.push({ type: "text", text: promptText });
 
-        // 5. Generate images in PARALLEL for speed
+        // ── GENERATE SINGLE IMAGE (with 30s timeout) ──
         const generateSingleImage = async (index: number): Promise<{ downloadUrl: string; storagePath: string; mimeType: string }> => {
-            const openrouterResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-                method: "POST",
-                headers: {
-                    "Authorization": `Bearer ${openrouterApiKey}`,
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": process.env.VITE_BASE_URL || "https://flowgenstudio.vercel.app",
-                    "X-Title": "Flowgen Studio",
+            const openrouterResponse = await fetchWithTimeout(
+                "https://openrouter.ai/api/v1/chat/completions",
+                {
+                    method: "POST",
+                    headers: {
+                        "Authorization": `Bearer ${openrouterApiKey}`,
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": process.env.VITE_BASE_URL || "https://flowgenstudio.vercel.app",
+                        "X-Title": "Flowgen Studio",
+                    },
+                    body: JSON.stringify({
+                        model: imageModel,
+                        modalities: ["image", "text"],
+                        stream: false,
+                        messages: [{ role: "user", content: contentParts }],
+                    }),
                 },
-                body: JSON.stringify({
-                    model: imageModel,
-                    modalities: ["image", "text"],
-                    stream: false,
-                    messages: [
-                        {
-                            role: "user",
-                            content: contentParts,
-                        }
-                    ],
-                }),
-            });
+                TIMEOUT_MS
+            );
 
             if (!openrouterResponse.ok) {
                 const errText = await openrouterResponse.text();
@@ -210,7 +332,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             if (choices && choices.length > 0) {
                 const message = choices[0].message;
 
-                // Priority 1: Check message.images[] (OpenRouter native image response format)
+                // Priority 1: message.images[]
                 if (message?.images && Array.isArray(message.images) && message.images.length > 0) {
                     for (const img of message.images) {
                         const url = img?.image_url?.url || img?.url;
@@ -225,7 +347,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     }
                 }
 
-                // Priority 2: Check message.content (array format with image_url parts)
+                // Priority 2: message.content (array)
                 if (!imageData && message?.content) {
                     if (Array.isArray(message.content)) {
                         for (const part of message.content) {
@@ -242,7 +364,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                             }
                         }
                     }
-                    // Priority 3: Check message.content (string with inline base64)
+                    // Priority 3: message.content (string)
                     else if (typeof message.content === 'string') {
                         const b64Match = message.content.match(/data:image\/([^;]+);base64,([A-Za-z0-9+/=]+)/);
                         if (b64Match) {
@@ -256,11 +378,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             if (!imageData) {
                 const debugInfo = {
                     hasChoices: !!openrouterData.choices,
-                    choicesLength: openrouterData.choices?.length,
                     hasImages: !!openrouterData.choices?.[0]?.message?.images,
                     messageKeys: Object.keys(openrouterData.choices?.[0]?.message || {}),
                 };
-                console.error('No image data found. Response structure:', JSON.stringify(debugInfo));
+                console.error('[Generate] No image data. Debug:', JSON.stringify(debugInfo));
                 throw new Error("No image data in OpenRouter response");
             }
 
@@ -271,10 +392,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
             const { error: uploadError } = await supabase.storage
                 .from('outputs')
-                .upload(filePath, buffer, {
-                    contentType: imageMime,
-                    upsert: false,
-                });
+                .upload(filePath, buffer, { contentType: imageMime, upsert: false });
 
             if (uploadError) {
                 throw new Error(`Storage upload failed: ${uploadError.message}`);
@@ -291,7 +409,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             };
         };
 
-        // Fire all image generations concurrently
+        // ── FIRE ALL IN PARALLEL ──
         const promises = Array.from({ length: numImages }, (_, i) => generateSingleImage(i));
         const results = await Promise.allSettled(promises);
 
@@ -307,51 +425,52 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 successCount++;
             } else {
                 failedCount++;
-                lastError = result.reason?.message || result.reason?.toString() || 'Unknown error';
-                console.error(`Image ${i + 1}/${numImages} FAILED:`, lastError);
+                const reason = result.reason;
+                if (reason?.name === 'AbortError') {
+                    lastError = 'Server sedang sibuk, coba beberapa saat lagi.';
+                } else {
+                    lastError = reason?.message || reason?.toString() || 'Unknown error';
+                }
+                console.error(`[Generate] Image ${i + 1}/${numImages} FAILED:`, lastError);
             }
         }
 
-        // 7. Deduct credits (only for successful generations)
+        // ── RELEASE GENERATING LOCK & UPDATE RATE DATA ──
         if (successCount > 0) {
+            // Deduct credits
             const { error: rpcError } = await supabase.rpc('deduct_credits_safe', { p_user_id: uid, p_amount: successCount });
             if (rpcError) {
-                // Fallback: direct update if RPC doesn't exist
                 await supabase
                     .from('users')
-                    .update({ credits: Math.max(0, userData.credits - successCount) })
+                    .update({ credits: Math.max(0, (userData as any).credits - successCount) } as never)
                     .eq('id', uid);
             }
 
-            // Insert credit ledger entry
-            await supabase.from('credit_ledger').insert({
-                user_id: uid,
-                amount: -successCount,
-                type: 'generate',
-                reference: `gen-${Date.now()}`,
-            });
+            // Insert generation record (ignore errors)
+            try {
+                await supabase.from('generations').insert({
+                    user_id: uid,
+                    prompt: promptText.substring(0, 500),
+                    image_urls: outputs.map(o => o.downloadUrl),
+                    credits_used: successCount,
+                } as never);
+            } catch (_) { /* ignore if generations table doesn't exist */ }
 
-            // Insert generation record
-            await supabase.from('generations').insert({
-                user_id: uid,
-                prompt: promptText.substring(0, 500),
-                image_urls: outputs.map(o => o.downloadUrl),
-                credits_used: successCount,
+            // Reset fail count on success
+            await upsertRateLimitData(uid, { is_generating: false, fail_count: 0, last_fail_at: null });
+            console.log(`[Generate] SUCCESS: user=${uid}, success=${successCount}, failed=${failedCount}`);
+        } else {
+            // All failed — increment failure count
+            const newFailCount = (rateData?.fail_count || 0) + 1;
+            await upsertRateLimitData(uid, {
+                is_generating: false,
+                fail_count: newFailCount,
+                last_fail_at: new Date().toISOString(),
             });
+            console.log(`[Generate] ALL_FAILED: user=${uid}, fail_count=${newFailCount}, error=${lastError}`);
         }
 
-        // 8. Refund ledger for failed images
-        if (failedCount > 0 && successCount < numImages) {
-            // No credit was deducted for failed ones since we only deducted successCount
-            await supabase.from('credit_ledger').insert({
-                user_id: uid,
-                amount: 0,
-                type: 'refund',
-                reference: `refund-${Date.now()}: ${failedCount} failed`,
-            });
-        }
-
-        // 9. Determine status
+        // ── DETERMINE STATUS ──
         let finalStatus: string;
         if (successCount === numImages) {
             finalStatus = "SUCCEEDED";
@@ -364,13 +483,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({
             status: finalStatus,
             outputs,
+            outputCount: outputs.length,
             successCount,
             failedCount,
             error: failedCount > 0 ? lastError : null,
         });
 
     } catch (err: any) {
-        console.error("Generate API error:", err);
-        return res.status(500).json({ error: err.message || "Internal server error" });
+        console.error("[Generate] UNHANDLED_ERROR:", err);
+        // Safety: release lock if we crash
+        try {
+            const authHeader = req.headers.authorization;
+            if (authHeader?.startsWith('Bearer ')) {
+                const token = authHeader.split(' ')[1];
+                const { data: { user } } = await supabase.auth.getUser(token);
+                if (user) {
+                    await upsertRateLimitData(user.id, { is_generating: false });
+                }
+            }
+        } catch (_) { /* ignore */ }
+
+        const message = err?.name === 'AbortError'
+            ? 'Server sedang sibuk, coba beberapa saat lagi.'
+            : (err.message || "Internal server error");
+
+        return res.status(500).json({ error: message });
     }
 }

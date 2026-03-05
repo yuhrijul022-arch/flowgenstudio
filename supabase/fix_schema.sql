@@ -156,4 +156,22 @@ BEGIN
     END IF;
 END $$;
 
--- Done! All columns and policies are now guaranteed to exist.
+-- ==============================
+-- 6. GENERATION RATE LIMITS (Rate limit + failure tracking + concurrency lock)
+-- ==============================
+CREATE TABLE IF NOT EXISTS public.generation_rate_limits (
+    user_id UUID PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,
+    request_timestamps TIMESTAMPTZ[] DEFAULT '{}',
+    fail_count INTEGER DEFAULT 0,
+    last_fail_at TIMESTAMPTZ,
+    is_generating BOOLEAN DEFAULT false,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE public.generation_rate_limits ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Service role can manage rate limits" ON public.generation_rate_limits;
+CREATE POLICY "Service role can manage rate limits" ON public.generation_rate_limits
+    FOR ALL USING (auth.role() = 'service_role');
+
+-- Done! All columns, tables, and policies are now guaranteed to exist.

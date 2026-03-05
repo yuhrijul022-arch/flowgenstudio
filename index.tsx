@@ -9,6 +9,7 @@ import { UnifiedCheckoutComponent } from './src/components/UnifiedCheckoutCompon
 import { PaymentSuccess } from './src/components/PaymentSuccess';
 import { PaymentPending } from './src/components/PaymentPending';
 import { BillingPage } from './src/pages/BillingPage';
+import { ErrorBoundary } from './src/components/ErrorBoundary';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -18,20 +19,23 @@ if (!rootElement) {
 const root = ReactDOM.createRoot(rootElement);
 root.render(
   <React.StrictMode>
-    <ToastProvider>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={
-            <AuthGate>
-              {(user) => <App user={user} />}
-            </AuthGate>
-          } />
-          <Route path="/formorder" element={<UnifiedCheckoutComponent />} />
-          <Route path="/success" element={<PaymentSuccess />} />
-          <Route path="/pending" element={<PaymentPending />} />
-          <Route path="/billing" element={<BillingPage />} />
-        </Routes>
-      </BrowserRouter>
-    </ToastProvider>
+    <ErrorBoundary>
+      <ToastProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={
+              <AuthGate>
+                {(user) => <App user={user} />}
+              </AuthGate>
+            } />
+            <Route path="/formorder" element={<UnifiedCheckoutComponent />} />
+            <Route path="/success" element={<PaymentSuccess />} />
+            <Route path="/pending" element={<PaymentPending />} />
+            <Route path="/billing" element={<BillingPage />} />
+          </Routes>
+        </BrowserRouter>
+      </ToastProvider>
+    </ErrorBoundary>
   </React.StrictMode>
 );
+
