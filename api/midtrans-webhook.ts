@@ -105,7 +105,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (isSuccess || statusCode === '200') {
 
             // Check Idempotency
-            if ((txData as any).status === 'paid' || (txData as any).credited === true) {
+            if ((txData as any).status === 'success' || (txData as any).credited === true) {
                 console.log('Already credited:', rawOrderId);
                 return res.status(200).send('OK: Already processed');
             }
@@ -145,7 +145,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 // For topup without userId, we can't credit.
                 console.error('No user_id for order:', rawOrderId);
                 const failPayload: any = {
-                    status: 'paid',
+                    status: 'success',
                     raw_notification: notification
                 };
                 // @ts-ignore
@@ -184,9 +184,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 await supabase.from('users').upsert(newUserPayload);
             }
 
-            // Update transaction to paid and credited
+            // Update transaction to success and credited
             const successPayload: any = {
-                status: 'paid',
+                status: 'success',
                 credited: true,
                 credited_at: new Date().toISOString(),
                 user_id: userId,
