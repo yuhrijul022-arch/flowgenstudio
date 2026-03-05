@@ -50,8 +50,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             .eq('id', uid)
             .single();
 
-        const email = userData?.email || user.email || 'unknown@flowgen.com';
-        const username = userData?.username || 'Flowgen User';
+        const email = (userData as any)?.email || user.email || 'unknown@flowgen.com';
+        const username = (userData as any)?.username || 'Flowgen User';
 
         const totalPrice = creditsQty * 2000;
         const orderId = `FLG-TOPUP-${Date.now()}-${Math.floor(Math.random() * 100000)}`;

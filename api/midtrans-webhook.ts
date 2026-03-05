@@ -196,7 +196,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             // @ts-ignore
             await supabase
                 .from('transactions')
-                .update(successPayload)
+                .update(successPayload as never)
                 .eq('order_id', rawOrderId);
 
             // Insert into processed notifications to guarantee idempotency
@@ -205,7 +205,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 transaction_id: (txData as any).id,
                 payload: notification
             };
-            await supabase.from('processed_notifications').insert(notifPayload);
+            await supabase.from('processed_notifications').insert(notifPayload as never);
 
             console.log('Credits applied:', { orderId: rawOrderId, userId, creditsToAdd, app, type });
 
@@ -219,7 +219,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             // @ts-ignore
             await supabase
                 .from('transactions')
-                .update(errorPayload)
+                .update(errorPayload as never)
                 .eq('order_id', rawOrderId);
 
             console.log('Status updated:', { orderId: rawOrderId, status: mappedStatus });
