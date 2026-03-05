@@ -52,6 +52,22 @@ export class ErrorBoundary extends Component<Props, State> {
         window.location.reload();
     };
 
+    handleResetSession = () => {
+        if (this.reloadTimer) clearTimeout(this.reloadTimer);
+        try {
+            // Clear corrupted Supabase storage
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && (key.startsWith('sb-') || key.includes('supabase'))) {
+                    localStorage.removeItem(key);
+                }
+            }
+        } catch (e) {
+            console.error(e);
+        }
+        window.location.reload();
+    };
+
     render() {
         if (this.state.hasError) {
             return (
@@ -76,7 +92,7 @@ export class ErrorBoundary extends Component<Props, State> {
                             ? 'Memuat ulang aplikasi...'
                             : 'Terjadi kendala pada aplikasi. Memuat ulang otomatis dalam 2 detik...'}
                     </p>
-                    <div style={{ display: 'flex', gap: '12px' }}>
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
                         <button
                             onClick={this.handleRetry}
                             style={{
@@ -105,6 +121,22 @@ export class ErrorBoundary extends Component<Props, State> {
                             }}
                         >
                             Muat Ulang
+                        </button>
+                        <button
+                            onClick={this.handleResetSession}
+                            style={{
+                                padding: '10px 24px',
+                                borderRadius: '8px',
+                                border: '1px solid #ff453a',
+                                background: 'transparent',
+                                color: '#ff453a',
+                                cursor: 'pointer',
+                                fontSize: '14px',
+                                fontWeight: 600,
+                            }}
+                            title="Hapus sesi jika aplikasi terus error"
+                        >
+                            Reset Sesi
                         </button>
                     </div>
                 </div>

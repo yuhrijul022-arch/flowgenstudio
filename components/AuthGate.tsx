@@ -118,7 +118,8 @@ export const AuthGate: React.FC<AuthGateProps> = ({ children }) => {
 
         // ── AUTH STATE CHANGE LISTENER ──
         const { data: { subscription } } = supabase.auth.onAuthStateChange(
-            async (_event, session) => {
+            async (event, session) => {
+                console.log(`[AuthGate] Auth event: ${event}`);
                 if (session?.user) {
                     const appUser = toAppUser(session.user);
                     if (bootstrappedUid.current !== session.user.id) {
@@ -130,7 +131,12 @@ export const AuthGate: React.FC<AuthGateProps> = ({ children }) => {
                         }
                     }
                     setUser(appUser);
-                } else {
+                } else if (event === 'SIGNED_OUT') {
+                    // Only wipe session explicitly if user signed out or deleted
+                    bootstrappedUid.current = null;
+                    setUser(null);
+                } else if (event === 'INITIAL_SESSION' && !session) {
+                    // Only on initial load if no session found
                     bootstrappedUid.current = null;
                     setUser(null);
                 }
@@ -151,8 +157,13 @@ export const AuthGate: React.FC<AuthGateProps> = ({ children }) => {
                 console.log('[AuthGate] tab_visible: refreshing session');
                 try {
                     const { data: { session }, error } = await supabase.auth.getSession();
-                    if (error || !session?.user) {
-                        // Session expired — sign out gracefully
+
+                    // Do NOT logout on network error. Only on valid response with no session.
+                    if (error) {
+                        console.error('[AuthGate] visibility_getSession_error:', error);
+                        // Network error, don't clear session yet
+                    } else if (!session?.user) {
+                        // Session actually expired from another tab
                         console.log('[AuthGate] session_expired_on_return');
                         bootstrappedUid.current = null;
                         setUser(null);
@@ -167,7 +178,12 @@ export const AuthGate: React.FC<AuthGateProps> = ({ children }) => {
         };
 
         document.addEventListener('visibilitychange', handleVisibilityChange);
-        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+        // Also listen to window focus as a fallback
+        window.addEventListener('focus', handleVisibilityChange);
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+            window.removeEventListener('focus', handleVisibilityChange);
+        };
     }, []);
 
     // ── LOADING GUARD: force exit loading after 15s ──

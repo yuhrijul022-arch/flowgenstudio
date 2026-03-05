@@ -53,9 +53,27 @@ export function useCredits(uid: string | null): CreditState {
         // Loading guard: force exit loading after 5 seconds
         const guard = setTimeout(() => setLoading(false), 5000);
 
+        // ── Realtime Sync ──
+        let channel: ReturnType<typeof supabase.channel> | null = null;
+        if (uid) {
+            channel = supabase.channel(`public:users:id=eq.${uid}`)
+                .on(
+                    'postgres_changes',
+                    { event: 'UPDATE', schema: 'public', table: 'users', filter: `id=eq.${uid}` },
+                    (payload) => {
+                        console.log('[Credits] Realtime update:', payload.new);
+                        if (payload.new && 'credits' in payload.new) {
+                            setCredits(Number(payload.new.credits));
+                        }
+                    }
+                )
+                .subscribe();
+        }
+
         return () => {
             clearInterval(interval);
             clearTimeout(guard);
+            if (channel) supabase.removeChannel(channel);
         };
     }, [uid, fetchCredits]);
 
