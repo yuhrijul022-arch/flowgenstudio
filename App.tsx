@@ -54,6 +54,9 @@ export const App: React.FC<AppProps> = ({ user }) => {
     const [styleMode, setStyleMode] = useState<'preset' | 'reference'>('preset');
     const [compositionMode, setCompositionMode] = useState<'batch' | 'group'>('batch');
 
+    const [generateCooldown, setGenerateCooldown] = useState(false);
+
+    // Loading message rotation
     useEffect(() => {
         let interval: any;
         if (isLoading) {
@@ -64,6 +67,23 @@ export const App: React.FC<AppProps> = ({ user }) => {
             }, 3000);
         }
         return () => clearInterval(interval);
+    }, [isLoading]);
+
+    // ── LOADING GUARD: auto-cancel after 30s to prevent infinite loading ──
+    useEffect(() => {
+        if (!isLoading) return;
+        const guard = setTimeout(() => {
+            if (isLoading) {
+                console.warn('[App] loading_guard: generation exceeded 30s, forcing cancel');
+                setIsLoading(false);
+                toast({
+                    type: 'warning',
+                    title: 'Server Sibuk',
+                    description: 'Server sedang sibuk, coba beberapa saat lagi.',
+                });
+            }
+        }, 30_000);
+        return () => clearTimeout(guard);
     }, [isLoading]);
 
     // ── Credit gate ─────────────────────────────────────

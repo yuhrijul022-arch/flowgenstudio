@@ -7,31 +7,48 @@ interface Props {
 interface State {
     hasError: boolean;
     error: Error | null;
+    autoReloading: boolean;
 }
 
 /**
  * Global Error Boundary — prevents blank screen crashes.
- * Shows a retry button instead of an empty page.
+ * Shows a retry UI and auto-reloads after 2 seconds.
  */
 export class ErrorBoundary extends Component<Props, State> {
+    private reloadTimer: ReturnType<typeof setTimeout> | null = null;
+
     constructor(props: Props) {
         super(props);
-        this.state = { hasError: false, error: null };
+        this.state = { hasError: false, error: null, autoReloading: false };
     }
 
-    static getDerivedStateFromError(error: Error): State {
+    static getDerivedStateFromError(error: Error): Partial<State> {
         return { hasError: true, error };
     }
 
     componentDidCatch(error: Error, errorInfo: ErrorInfo) {
         console.error('[ErrorBoundary] App crashed:', error, errorInfo);
+
+        // Auto-reload after 2 seconds
+        this.reloadTimer = setTimeout(() => {
+            this.setState({ autoReloading: true });
+            window.location.reload();
+        }, 2000);
+    }
+
+    componentWillUnmount() {
+        if (this.reloadTimer) {
+            clearTimeout(this.reloadTimer);
+        }
     }
 
     handleRetry = () => {
-        this.setState({ hasError: false, error: null });
+        if (this.reloadTimer) clearTimeout(this.reloadTimer);
+        this.setState({ hasError: false, error: null, autoReloading: false });
     };
 
     handleReload = () => {
+        if (this.reloadTimer) clearTimeout(this.reloadTimer);
         window.location.reload();
     };
 
@@ -55,7 +72,9 @@ export class ErrorBoundary extends Component<Props, State> {
                         Terjadi Kesalahan
                     </h2>
                     <p style={{ color: '#888', fontSize: '14px', marginBottom: '24px', maxWidth: '400px' }}>
-                        Terjadi kendala pada aplikasi. Silakan coba lagi.
+                        {this.state.autoReloading
+                            ? 'Memuat ulang aplikasi...'
+                            : 'Terjadi kendala pada aplikasi. Memuat ulang otomatis dalam 2 detik...'}
                     </p>
                     <div style={{ display: 'flex', gap: '12px' }}>
                         <button
