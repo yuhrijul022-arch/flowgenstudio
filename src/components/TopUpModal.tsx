@@ -73,21 +73,40 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({ isOpen, onClose }) => {
                 });
             }
 
+            const pollAndClose = async (userId: string) => {
+                toast({ type: 'info', title: 'Memverifikasi', description: 'Memeriksa status Top Up & update credits...' });
+                let attempts = 0;
+                const interval = setInterval(async () => {
+                    attempts++;
+                    if (attempts > 15) { // 30 seconds
+                        clearInterval(interval);
+                        onClose();
+                        return;
+                    }
+                    const { data } = await supabase.from('users').select('credits').eq('id', userId).single();
+                    if (data && data.credits > 0) {
+                        clearInterval(interval);
+                        toast({ type: 'success', title: 'Berhasil', description: 'Credits kamu sudah bertambah!' });
+                        onClose();
+                        setTimeout(() => window.location.reload(), 500); // hard refresh to update UI state across app
+                    }
+                }, 2000);
+            };
+
             (window as any).snap.pay(snapToken, {
                 onSuccess: function (res: any) {
-                    toast({ type: 'success', title: 'Pembayaran Berhasil', description: 'Credits kamu sudah bertambah!' });
-                    onClose();
+                    pollAndClose(session.user.id);
                 },
                 onPending: function (res: any) {
-                    toast({ type: 'success', title: 'Menunggu Pembayaran', description: 'Silakan selesaikan pembayaran sesuai instruksi.' });
-                    onClose();
+                    toast({ type: 'warning', title: 'Menunggu Pembayaran', description: 'Silakan selesaikan pembayaran sesuai instruksi.' });
+                    pollAndClose(session.user.id);
                 },
                 onError: function (res: any) {
                     toast({ type: 'error', title: 'Pembayaran Gagal', description: 'Terjadi kesalahan pada pembayaran.' });
                 },
                 onClose: function () {
-                    toast({ type: 'warning', title: 'Tertunda', description: 'Pembayaran tertunda. Cek tab Billing untuk lanjut membayar.' });
-                    onClose();
+                    toast({ type: 'warning', title: 'Tertunda', description: 'Jika sudah bayar, credits akan masuk sebentar lagi.' });
+                    pollAndClose(session.user.id);
                 }
             });
 

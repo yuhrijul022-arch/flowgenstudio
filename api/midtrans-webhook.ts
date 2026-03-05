@@ -125,15 +125,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             let userId = (txData as any).user_id;
             let creditsToAdd = (txData as any).credits_to_add || 0;
 
-            // Flowgen strict signup rule if missing credits
-            if (app === 'FLG' && type === 'SIGNUP' && creditsToAdd === 0) {
-                // If the draft was missing but we know it's a FLG signup, default to 60.
-                creditsToAdd = 60;
-            }
-
-            // For SIGNUP: create or find user
-            if (!userId && type === 'SIGNUP') {
-                userId = await resolveOrCreateUser((txData as any).email, (txData as any).username, (txData as any).password, app);
+            if (!userId) {
+                const emailFallback = (txData as any).email || notification.customer_details?.email;
+                if (emailFallback) {
+                    console.log('Webhook warning: user_id missing in draft, attempting email fallback', emailFallback);
+                    const { data: fallbackUser } = await supabase.from('users').select('id').eq('email', emailFallback).single();
+                    if (fallbackUser) {
+                        userId = (fallbackUser as any).id;
+                    } else {
+                        // Fallback 2: Check Supabase Auth
+                        const { data: authUsers } = await supabase.auth.admin.listUsers();
+                        const foundAuth = authUsers?.users?.find(u => u.email === emailFallback);
+                        if (foundAuth) userId = foundAuth.id;
+                    }
+                }
             }
 
             if (!userId) {
@@ -228,37 +233,3 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 }
 
-/**
- * For SIGNUP: find existing Auth user by email, or create one.
- */
-async function resolveOrCreateUser(
-    email: string,
-    username: string | null,
-    password: string | null,
-    app: string
-): Promise<string> {
-    const { data: users } = await supabase.auth.admin.listUsers();
-    const existing = users?.users?.find(u => u.email === email);
-
-    if (existing) {
-        return existing.id;
-    }
-
-    const { data: newUser, error } = await supabase.auth.admin.createUser({
-        email,
-        password: password || Math.random().toString(36).substring(2, 14),
-        user_metadata: {
-            full_name: username || undefined,
-            app: app // Tag to distinguish origin
-        },
-        email_confirm: true,
-    });
-
-    if (error || !newUser.user) {
-        console.error('Failed to create user:', error);
-        throw new Error('Failed to create user');
-    }
-
-    console.log('User created for checkout:', { email, uid: newUser.user.id });
-    return newUser.user.id;
-}

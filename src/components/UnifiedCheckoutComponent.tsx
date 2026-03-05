@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useToast } from './ui/ToastProvider';
 import { Icon } from '../../components/Icon';
 import { formatIDR } from '../utils/currency';
+import { supabase } from '../lib/supabase';
 
 interface CreateTxResponse {
     snapToken: string;
@@ -46,9 +47,29 @@ export const UnifiedCheckoutComponent: React.FC = () => {
         setForm(prev => ({ ...prev, [key]: val }));
     };
 
-    const openSnap = (token: string, clientKey: string, isProd: boolean) => {
+    const openSnap = (token: string, clientKey: string, isProd: boolean, userId: string) => {
         const scriptId = 'midtrans-script';
         let script = document.getElementById(scriptId) as HTMLScriptElement;
+
+        const pollAndRedirect = async () => {
+            toast({ type: 'info', title: 'Memverifikasi', description: 'Memeriksa status pembayaran & menambahkan credits...' });
+            let attempts = 0;
+            const interval = setInterval(async () => {
+                attempts++;
+                if (attempts > 15) { // 30 seconds timeout
+                    clearInterval(interval);
+                    navigate('/');
+                    return;
+                }
+                const { data } = await supabase.from('users').select('credits').eq('id', userId).single();
+                if (data && data.credits > 0) {
+                    clearInterval(interval);
+                    toast({ type: 'success', title: 'Sukses', description: 'Pembayaran berhasil dan credits telah ditambahkan!' });
+                    navigate('/');
+                    setTimeout(() => window.location.reload(), 500); // hard refresh to update UI state across app
+                }
+            }, 2000);
+        };
 
         const openPopup = () => {
             if ((window as any).snap) {
@@ -58,15 +79,15 @@ export const UnifiedCheckoutComponent: React.FC = () => {
                         localStorage.removeItem('lastSnapClientKey');
                         localStorage.removeItem('lastSnapIsProd');
                         setPendingToken(null);
-                        toast({ type: 'success', title: 'Sukses', description: 'Pembayaran berhasil dan akun Pro aktif!' });
-                        navigate('/');
+                        pollAndRedirect();
                     },
                     onPending: function (result: any) {
-                        toast({ type: 'warning', title: 'Pembayaran belum selesai', description: 'Silakan selesaikan instruksi pembayaran.' });
+                        toast({ type: 'warning', title: 'Pembayaran belum diselesaikan', description: 'Selesaikan instruksi, refresh jika sudah bayar.' });
                         localStorage.setItem('lastSnapToken', token);
                         localStorage.setItem('lastSnapClientKey', clientKey);
                         localStorage.setItem('lastSnapIsProd', String(isProd));
                         setPendingToken(token);
+                        pollAndRedirect();
                     },
                     onError: function (result: any) {
                         toast({ type: 'error', title: 'Gagal', description: 'Transaksi gagal diproses.' });
@@ -74,11 +95,12 @@ export const UnifiedCheckoutComponent: React.FC = () => {
                         setPendingToken(null);
                     },
                     onClose: function () {
-                        toast({ type: 'warning', title: 'Tertunda', description: 'Pembayaran tertunda. Cek tab Billing untuk melanjutkan pembayaran.' });
+                        toast({ type: 'warning', title: 'Tertunda', description: 'Jika sudah bayar, credits akan otomatis masuk sebentar lagi.' });
                         localStorage.setItem('lastSnapToken', token);
                         localStorage.setItem('lastSnapClientKey', clientKey);
                         localStorage.setItem('lastSnapIsProd', String(isProd));
                         setPendingToken(token);
+                        pollAndRedirect();
                     }
                 });
             }
@@ -103,13 +125,45 @@ export const UnifiedCheckoutComponent: React.FC = () => {
         setLoading(true);
 
         try {
-            const baseUrl = import.meta.env.PROD ? '' : (import.meta.env.VITE_BASE_URL || ''); const response = await fetch(`${baseUrl}/api/create-transaction`, {
+            // STEP 1: Authenticate the user first
+            let sessionResponse = await supabase.auth.signUp({
+                email: form.email,
+                password: form.password,
+                options: {
+                    data: {
+                        username: form.username,
+                    }
+                }
+            });
+
+            // If user already registered, signup returns data but with a specific error or no session
+            if (sessionResponse.error || !sessionResponse.data.session) {
+                // Fallback to signIn
+                sessionResponse = await supabase.auth.signInWithPassword({
+                    email: form.email,
+                    password: form.password,
+                });
+                if (sessionResponse.error) {
+                    throw new Error("Gagal login atau mendaftar: " + sessionResponse.error.message);
+                }
+            }
+
+            const token = sessionResponse.data.session?.access_token;
+            if (!token) {
+                throw new Error("Gagal mendapatkan sesi valid.");
+            }
+
+            // STEP 2: Create Transaction with Authorized token
+            const baseUrl = import.meta.env.PROD ? '' : (import.meta.env.VITE_BASE_URL || '');
+            const response = await fetch(`${baseUrl}/api/create-transaction`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
                 body: JSON.stringify({
                     email: form.email,
                     username: form.username,
-                    password: form.password,
                     promoCode: form.promoCode,
                 }),
             });
@@ -123,7 +177,9 @@ export const UnifiedCheckoutComponent: React.FC = () => {
             const data = result.data;
             const clientKey = import.meta.env.VITE_MIDTRANS_CLIENT_KEY || data.clientKey;
             const isProd = import.meta.env.VITE_MIDTRANS_IS_PROD === 'true';
-            openSnap(data.snapToken, clientKey, isProd);
+
+            const userId = sessionResponse.data.session?.user?.id || '';
+            openSnap(data.snapToken, clientKey, isProd, userId);
 
         } catch (err: any) {
             console.error("Create Tx Error:", err);
@@ -241,7 +297,11 @@ export const UnifiedCheckoutComponent: React.FC = () => {
                             {pendingToken && (
                                 <button
                                     type="button"
-                                    onClick={() => openSnap(pendingToken, pendingClientKey, pendingIsProd)}
+                                    onClick={async () => {
+                                        const { data } = await supabase.auth.getSession();
+                                        const userId = data.session?.user?.id || '';
+                                        openSnap(pendingToken, pendingClientKey, pendingIsProd, userId);
+                                    }}
                                     className="w-full py-4 rounded-xl font-medium text-[15px] transition-all flex items-center justify-center gap-2 mt-3 bg-[#0071e3] text-white hover:bg-[#005bb5] shadow-lg shadow-[#0071e3]/20 active:scale-[0.98]"
                                 >
                                     Bayar Sekarang (Transaksi Tertunda)

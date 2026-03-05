@@ -28,7 +28,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
 
 
-        const { email, username, password } = req.body;
+        let { email, username, password } = req.body;
+
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({ error: 'Missing or invalid Authorization header' });
+        }
+        const token = authHeader.split(' ')[1];
+
+        // Verify user
+        const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+        if (authError || !user) {
+            console.error('Create Tx Auth Error:', authError?.message);
+            return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+        }
+
+        // Override payload email with verified user email for safety
+        email = user.email;
 
         if (!email || !username) {
             return res.status(400).json({ error: 'Missing required fields: email, username' });
@@ -86,10 +102,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             app: 'FLG',
             order_id: orderId,
             type: 'SIGNUP',
-            user_id: null, // Will be set by webhook on payment success
+            user_id: user.id, // Strictly bind to authenticated user
             email,
             username,
-            password: password || null, // Stored for user creation on webhook
+            password: password || null,
             credits_to_add: 60,
             amount: basePrice,
             snap_token: snapToken,
