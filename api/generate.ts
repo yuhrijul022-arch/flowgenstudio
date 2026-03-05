@@ -185,11 +185,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     headers: {
                         "Authorization": `Bearer ${openrouterApiKey}`,
                         "Content-Type": "application/json",
-                        "HTTP-Referer": process.env.VITE_BASE_URL || "https://flowgenstudio.com",
+                        "HTTP-Referer": process.env.VITE_BASE_URL || "https://flowgenstudio.vercel.app",
                         "X-Title": "Flowgen Studio",
                     },
                     body: JSON.stringify({
                         model: imageModel,
+                        modalities: ["image", "text"],
+                        stream: false,
                         messages: [
                             {
                                 role: "user",
@@ -213,8 +215,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 const choices = openrouterData.choices;
                 if (choices && choices.length > 0) {
                     const message = choices[0].message;
-                    if (message?.content) {
-                        // Handle array content (multimodal response)
+
+                    // Priority 1: Check message.images[] (OpenRouter native image response format)
+                    if (message?.images && Array.isArray(message.images) && message.images.length > 0) {
+                        for (const img of message.images) {
+                            const url = img?.image_url?.url || img?.url;
+                            if (url && url.startsWith('data:')) {
+                                const match = url.match(/^data:([^;]+);base64,(.+)$/);
+                                if (match) {
+                                    imageMime = match[1];
+                                    imageData = match[2];
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // Priority 2: Check message.content (array format with image_url parts)
+                    if (!imageData && message?.content) {
                         if (Array.isArray(message.content)) {
                             for (const part of message.content) {
                                 if (part.type === 'image_url' && part.image_url?.url) {
@@ -230,7 +248,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                                 }
                             }
                         }
-                        // Handle string content with inline base64
+                        // Priority 3: Check message.content (string with inline base64)
                         else if (typeof message.content === 'string') {
                             const b64Match = message.content.match(/data:image\/([^;]+);base64,([A-Za-z0-9+/=]+)/);
                             if (b64Match) {
@@ -242,6 +260,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 }
 
                 if (!imageData) {
+                    // Log the response structure for debugging
+                    const debugInfo = {
+                        hasChoices: !!openrouterData.choices,
+                        choicesLength: openrouterData.choices?.length,
+                        hasMessage: !!openrouterData.choices?.[0]?.message,
+                        hasImages: !!openrouterData.choices?.[0]?.message?.images,
+                        imagesLength: openrouterData.choices?.[0]?.message?.images?.length,
+                        contentType: typeof openrouterData.choices?.[0]?.message?.content,
+                        contentIsArray: Array.isArray(openrouterData.choices?.[0]?.message?.content),
+                        messageKeys: Object.keys(openrouterData.choices?.[0]?.message || {}),
+                    };
+                    console.error('No image data found. Response structure:', JSON.stringify(debugInfo));
+                    console.error('Full message object:', JSON.stringify(openrouterData.choices?.[0]?.message).substring(0, 500));
                     throw new Error("No image data in OpenRouter response");
                 }
 
