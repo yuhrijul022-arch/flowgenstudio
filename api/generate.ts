@@ -172,141 +172,142 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         contentParts.push({ type: "text", text: promptText });
 
-        // 5. Generate images
+        // 5. Generate images in PARALLEL for speed
+        const generateSingleImage = async (index: number): Promise<{ downloadUrl: string; storagePath: string; mimeType: string }> => {
+            const openrouterResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${openrouterApiKey}`,
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": process.env.VITE_BASE_URL || "https://flowgenstudio.vercel.app",
+                    "X-Title": "Flowgen Studio",
+                },
+                body: JSON.stringify({
+                    model: imageModel,
+                    modalities: ["image", "text"],
+                    stream: false,
+                    messages: [
+                        {
+                            role: "user",
+                            content: contentParts,
+                        }
+                    ],
+                }),
+            });
+
+            if (!openrouterResponse.ok) {
+                const errText = await openrouterResponse.text();
+                throw new Error(`OpenRouter API error (${openrouterResponse.status}): ${errText.substring(0, 200)}`);
+            }
+
+            const openrouterData = await openrouterResponse.json();
+
+            // Extract image from response
+            let imageData: string | null = null;
+            let imageMime = "image/png";
+
+            const choices = openrouterData.choices;
+            if (choices && choices.length > 0) {
+                const message = choices[0].message;
+
+                // Priority 1: Check message.images[] (OpenRouter native image response format)
+                if (message?.images && Array.isArray(message.images) && message.images.length > 0) {
+                    for (const img of message.images) {
+                        const url = img?.image_url?.url || img?.url;
+                        if (url && url.startsWith('data:')) {
+                            const match = url.match(/^data:([^;]+);base64,(.+)$/);
+                            if (match) {
+                                imageMime = match[1];
+                                imageData = match[2];
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Priority 2: Check message.content (array format with image_url parts)
+                if (!imageData && message?.content) {
+                    if (Array.isArray(message.content)) {
+                        for (const part of message.content) {
+                            if (part.type === 'image_url' && part.image_url?.url) {
+                                const url = part.image_url.url;
+                                if (url.startsWith('data:')) {
+                                    const match = url.match(/^data:([^;]+);base64,(.+)$/);
+                                    if (match) {
+                                        imageMime = match[1];
+                                        imageData = match[2];
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    // Priority 3: Check message.content (string with inline base64)
+                    else if (typeof message.content === 'string') {
+                        const b64Match = message.content.match(/data:image\/([^;]+);base64,([A-Za-z0-9+/=]+)/);
+                        if (b64Match) {
+                            imageMime = `image/${b64Match[1]}`;
+                            imageData = b64Match[2];
+                        }
+                    }
+                }
+            }
+
+            if (!imageData) {
+                const debugInfo = {
+                    hasChoices: !!openrouterData.choices,
+                    choicesLength: openrouterData.choices?.length,
+                    hasImages: !!openrouterData.choices?.[0]?.message?.images,
+                    messageKeys: Object.keys(openrouterData.choices?.[0]?.message || {}),
+                };
+                console.error('No image data found. Response structure:', JSON.stringify(debugInfo));
+                throw new Error("No image data in OpenRouter response");
+            }
+
+            // Upload to Supabase Storage
+            const ext = imageMime.includes("jpeg") || imageMime.includes("jpg") ? "jpg" : "png";
+            const filePath = `${uid}/${Date.now()}-${index}.${ext}`;
+            const buffer = Buffer.from(imageData, "base64");
+
+            const { error: uploadError } = await supabase.storage
+                .from('outputs')
+                .upload(filePath, buffer, {
+                    contentType: imageMime,
+                    upsert: false,
+                });
+
+            if (uploadError) {
+                throw new Error(`Storage upload failed: ${uploadError.message}`);
+            }
+
+            const { data: urlData } = supabase.storage
+                .from('outputs')
+                .getPublicUrl(filePath);
+
+            return {
+                downloadUrl: urlData.publicUrl,
+                storagePath: filePath,
+                mimeType: imageMime,
+            };
+        };
+
+        // Fire all image generations concurrently
+        const promises = Array.from({ length: numImages }, (_, i) => generateSingleImage(i));
+        const results = await Promise.allSettled(promises);
+
         const outputs: Array<{ downloadUrl: string; storagePath: string; mimeType: string }> = [];
         let successCount = 0;
         let failedCount = 0;
         let lastError = "";
 
-        for (let i = 0; i < numImages; i++) {
-            try {
-                const openrouterResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-                    method: "POST",
-                    headers: {
-                        "Authorization": `Bearer ${openrouterApiKey}`,
-                        "Content-Type": "application/json",
-                        "HTTP-Referer": process.env.VITE_BASE_URL || "https://flowgenstudio.vercel.app",
-                        "X-Title": "Flowgen Studio",
-                    },
-                    body: JSON.stringify({
-                        model: imageModel,
-                        modalities: ["image", "text"],
-                        stream: false,
-                        messages: [
-                            {
-                                role: "user",
-                                content: contentParts,
-                            }
-                        ],
-                    }),
-                });
-
-                if (!openrouterResponse.ok) {
-                    const errText = await openrouterResponse.text();
-                    throw new Error(`OpenRouter API error (${openrouterResponse.status}): ${errText.substring(0, 200)}`);
-                }
-
-                const openrouterData = await openrouterResponse.json();
-
-                // Extract image from response
-                let imageData: string | null = null;
-                let imageMime = "image/png";
-
-                const choices = openrouterData.choices;
-                if (choices && choices.length > 0) {
-                    const message = choices[0].message;
-
-                    // Priority 1: Check message.images[] (OpenRouter native image response format)
-                    if (message?.images && Array.isArray(message.images) && message.images.length > 0) {
-                        for (const img of message.images) {
-                            const url = img?.image_url?.url || img?.url;
-                            if (url && url.startsWith('data:')) {
-                                const match = url.match(/^data:([^;]+);base64,(.+)$/);
-                                if (match) {
-                                    imageMime = match[1];
-                                    imageData = match[2];
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    // Priority 2: Check message.content (array format with image_url parts)
-                    if (!imageData && message?.content) {
-                        if (Array.isArray(message.content)) {
-                            for (const part of message.content) {
-                                if (part.type === 'image_url' && part.image_url?.url) {
-                                    const url = part.image_url.url;
-                                    if (url.startsWith('data:')) {
-                                        const match = url.match(/^data:([^;]+);base64,(.+)$/);
-                                        if (match) {
-                                            imageMime = match[1];
-                                            imageData = match[2];
-                                        }
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                        // Priority 3: Check message.content (string with inline base64)
-                        else if (typeof message.content === 'string') {
-                            const b64Match = message.content.match(/data:image\/([^;]+);base64,([A-Za-z0-9+/=]+)/);
-                            if (b64Match) {
-                                imageMime = `image/${b64Match[1]}`;
-                                imageData = b64Match[2];
-                            }
-                        }
-                    }
-                }
-
-                if (!imageData) {
-                    // Log the response structure for debugging
-                    const debugInfo = {
-                        hasChoices: !!openrouterData.choices,
-                        choicesLength: openrouterData.choices?.length,
-                        hasMessage: !!openrouterData.choices?.[0]?.message,
-                        hasImages: !!openrouterData.choices?.[0]?.message?.images,
-                        imagesLength: openrouterData.choices?.[0]?.message?.images?.length,
-                        contentType: typeof openrouterData.choices?.[0]?.message?.content,
-                        contentIsArray: Array.isArray(openrouterData.choices?.[0]?.message?.content),
-                        messageKeys: Object.keys(openrouterData.choices?.[0]?.message || {}),
-                    };
-                    console.error('No image data found. Response structure:', JSON.stringify(debugInfo));
-                    console.error('Full message object:', JSON.stringify(openrouterData.choices?.[0]?.message).substring(0, 500));
-                    throw new Error("No image data in OpenRouter response");
-                }
-
-                // 6. Upload to Supabase Storage
-                const ext = imageMime.includes("jpeg") || imageMime.includes("jpg") ? "jpg" : "png";
-                const filePath = `${uid}/${Date.now()}-${i}.${ext}`;
-                const buffer = Buffer.from(imageData, "base64");
-
-                const { error: uploadError } = await supabase.storage
-                    .from('outputs')
-                    .upload(filePath, buffer, {
-                        contentType: imageMime,
-                        upsert: false,
-                    });
-
-                if (uploadError) {
-                    throw new Error(`Storage upload failed: ${uploadError.message}`);
-                }
-
-                // Get public URL
-                const { data: urlData } = supabase.storage
-                    .from('outputs')
-                    .getPublicUrl(filePath);
-
-                outputs.push({
-                    downloadUrl: urlData.publicUrl,
-                    storagePath: filePath,
-                    mimeType: imageMime,
-                });
+        for (let i = 0; i < results.length; i++) {
+            const result = results[i];
+            if (result.status === 'fulfilled') {
+                outputs.push(result.value);
                 successCount++;
-
-            } catch (err: any) {
+            } else {
                 failedCount++;
-                lastError = err.message || err.toString();
+                lastError = result.reason?.message || result.reason?.toString() || 'Unknown error';
                 console.error(`Image ${i + 1}/${numImages} FAILED:`, lastError);
             }
         }
