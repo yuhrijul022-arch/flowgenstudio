@@ -31,7 +31,13 @@ let _client: SupabaseClient<any, 'public', any>;
 
 export const getSupabaseClient = () => {
     if (!_client) {
-        _client = createClient(SUPABASE_URL as string, SUPABASE_KEY as string);
+        _client = createClient(SUPABASE_URL as string, SUPABASE_KEY as string, {
+            auth: {
+                persistSession: true, // WAJIB: Simpan sesi di localStorage
+                autoRefreshToken: true, // Otomatis perbarui token sebelum expired
+                detectSessionInUrl: true // Dukung login via OAuth/Google
+            }
+        });
     }
     return _client;
 };
