@@ -100,8 +100,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const snapData = await snapResponse.json();
         const snapToken = snapData.token;
 
+        // Ensure user exists in users table to prevent FK violations
+        // @ts-ignore
+        const { error: userInsertErr } = await supabase.from('users').upsert({
+            id: uid,
+            app: 'FLG',
+            email: email,
+            username: username,
+            credits: 0,
+            pro_active: false
+        }, { onConflict: 'id', ignoreDuplicates: true });
+
+        if (userInsertErr) {
+            console.error('Failed to upsert user for topup draft:', userInsertErr);
+        }
+
         // Save to transactions
-        await supabase.from('transactions').insert({
+        const { error: txInsertErr } = await supabase.from('transactions').insert({
             app: 'FLG',
             order_id: orderId,
             type: 'TOPUP',
@@ -113,6 +128,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             status: 'pending',
             credited: false,
         } as any);
+
+        if (txInsertErr) {
+            console.error('Failed to create topup transaction draft:', txInsertErr);
+            return res.status(500).json({ error: 'Failed to save transaction draft.' });
+        }
 
         return res.status(200).json({
             snapToken,

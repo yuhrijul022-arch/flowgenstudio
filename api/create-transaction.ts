@@ -97,8 +97,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const snapData = await snapResponse.json();
         const snapToken = snapData.token;
 
+        // Ensure user exists in users table to prevent FK violations
+        // @ts-ignore
+        const { error: userInsertErr } = await supabase.from('users').upsert({
+            id: user.id,
+            app: 'FLG',
+            email: email,
+            username: username,
+            credits: 0,
+            pro_active: false
+        }, { onConflict: 'id', ignoreDuplicates: true });
+
+        if (userInsertErr) {
+            console.error('Failed to upsert user for draft:', userInsertErr);
+            // Optionally log but continue, hoping FK cascade handles it, or return error. 
+            // Better to return error if strict FK exists.
+            // return res.status(500).json({ error: 'Failed to initialize user data.' });
+        }
+
         // Save to transactions
-        await supabase.from('transactions').insert({
+        const { error: txInsertErr } = await supabase.from('transactions').insert({
             app: 'FLG',
             order_id: orderId,
             type: 'SIGNUP',
@@ -112,6 +130,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             status: 'pending',
             credited: false,
         } as any);
+
+        if (txInsertErr) {
+            console.error('Failed to create transaction draft:', txInsertErr);
+            return res.status(500).json({ error: 'Failed to save transaction draft.' });
+        }
 
         return res.status(200).json({
             data: {
