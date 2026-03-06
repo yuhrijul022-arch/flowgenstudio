@@ -12,7 +12,7 @@ import { useToast } from './src/components/ui/ToastProvider';
 import { AlertModal } from './src/components/ui/AlertModal';
 import { TopUpModal } from './src/components/TopUpModal';
 import { formatUserFacingError } from './src/utils/errors';
-import { reserveAndGenerate, filesToBase64 } from './src/lib/generateService';
+import { reserveAndGenerate, filesToBase64, fetchUserGenerations } from './src/lib/generateService';
 import { downloadImage, downloadAll } from './src/utils/download';
 
 const LOADING_MESSAGES = [
@@ -86,6 +86,22 @@ export const App: React.FC<AppProps> = ({ user }) => {
         return () => clearTimeout(guard);
     }, [isLoading]);
 
+    // ── LOAD GENERATION HISTORY ON MOUNT ──
+    useEffect(() => {
+        const loadHistory = async () => {
+            if (!user?.uid) return;
+            try {
+                const history = await fetchUserGenerations(user.uid);
+                if (history.length > 0) {
+                    setGeneratedImages(history);
+                }
+            } catch (err) {
+                console.error('[App] Failed to load generation history:', err);
+            }
+        };
+        loadHistory();
+    }, [user.uid]);
+
     // ── Credit gate ─────────────────────────────────────
     const noCredits = !creditsLoading && availableCredits <= 0;
     const canGenerate = !isLoading && productPhotos.length > 0 && !noCredits && availableCredits >= numImages;
@@ -120,7 +136,7 @@ export const App: React.FC<AppProps> = ({ user }) => {
         setIsLoading(true);
         setError(null);
         setPartialWarning(null);
-        setGeneratedImages([]);
+        // Tidak menghapus gambar lama agar tetap terlihat selama proses generate baru
 
         try {
             const productBase64 = await filesToBase64(productPhotos);

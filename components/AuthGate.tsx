@@ -13,36 +13,29 @@ export const AuthGate: React.FC<{ children: (user: AppUser) => React.ReactNode }
         if (initialized.current) return;
         initialized.current = true;
 
-        // LANGKAH 1: Ambil session yang ada di storage secara instan
-        const syncAuth = async () => {
-            try {
-                const { data: { session } } = await supabase.auth.getSession();
-                if (session?.user) {
-                    setUser(toAppUser(session.user));
-                    // Background sync: jangan pakai 'await' agar tidak menghalangi UI
-                    ensureUserRow(session.user).catch(console.error);
-                }
-            } catch (err) {
-                console.error('[AuthGate] Bootstrap error:', err);
-            } finally {
-                setAuthLoading(false); // Langsung buka loading screen
-            }
-        };
-
-        syncAuth();
-
-        // LANGKAH 2: Pasang listener untuk semua perubahan status
+        // Gunakan onAuthStateChange sebagai satu-satunya sumber kebenaran (Source of Truth)
         const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
             console.log(`[AuthGate] Event: ${event}`);
 
             if (session?.user) {
                 setUser(toAppUser(session.user));
-                // Sync user data tanpa memblokir aplikasi
+                // Sync ke DB tanpa memblokir UI
                 ensureUserRow(session.user).catch(console.error);
             } else {
                 setUser(null);
             }
+
+            // HANYA set loading false setelah event INITIAL_SESSION atau SIGNED_IN diterima
             setAuthLoading(false);
+        });
+
+        // Pengecekan sesi awal tetap dilakukan untuk mempercepat proses jika token masih segar
+        supabase.auth.getSession().then(({ data: { session } }) => {
+            if (session?.user) {
+                setUser(toAppUser(session.user));
+                setAuthLoading(false);
+            }
+            // Jika null, biarkan onAuthStateChange yang memutuskan di atas
         });
 
         return () => subscription.unsubscribe();
@@ -57,7 +50,7 @@ export const AuthGate: React.FC<{ children: (user: AppUser) => React.ReactNode }
     }
 
     if (!user) {
-        return <LoginPage onSignIn={async () => { await supabase.auth.signInWithOAuth({ provider: 'google' }); }} loading={false} />;
+        return <LoginPage onSignIn={async () => { await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.origin } }); }} loading={false} />;
     }
 
     return <>{children(user)}</>;

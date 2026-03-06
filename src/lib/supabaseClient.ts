@@ -19,8 +19,8 @@ const getEnvVar = (viteKey: string, nodeKey: string) => {
 };
 
 const SUPABASE_URL = getEnvVar('VITE_SUPABASE_URL', 'SUPABASE_URL');
-// In backend, prefer SERVICE_ROLE_KEY to bypass RLS, otherwise fallback to ANON_KEY
-const SUPABASE_KEY = getEnvVar('VITE_SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY') || getEnvVar('VITE_SUPABASE_ANON_KEY', 'SUPABASE_ANON_KEY');
+// Client-side: ALWAYS use ANON_KEY (never SERVICE_ROLE_KEY in the browser)
+const SUPABASE_KEY = getEnvVar('VITE_SUPABASE_ANON_KEY', 'SUPABASE_ANON_KEY');
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
     if (typeof console !== 'undefined') console.warn("Missing Supabase env vars");
@@ -33,9 +33,10 @@ export const getSupabaseClient = () => {
     if (!_client) {
         _client = createClient(SUPABASE_URL as string, SUPABASE_KEY as string, {
             auth: {
-                persistSession: true, // WAJIB: Simpan sesi di localStorage
-                autoRefreshToken: true, // Otomatis perbarui token sebelum expired
-                detectSessionInUrl: true // Dukung login via OAuth/Google
+                persistSession: true,       // Simpan sesi di localStorage
+                autoRefreshToken: true,     // Otomatis perbarui token sebelum expired
+                detectSessionInUrl: true,   // Dukung login via OAuth/Google
+                storageKey: 'flowgen-auth-token' // Key statis agar tidak berubah saat refresh
             }
         });
     }

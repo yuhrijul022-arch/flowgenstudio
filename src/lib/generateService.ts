@@ -38,6 +38,46 @@ export async function filesToBase64(files: File[]): Promise<string[]> {
 }
 
 /**
+ * Mengambil riwayat gambar yang pernah di-generate oleh user dari Supabase.
+ * Backend menyimpan image_urls sebagai array di tabel generations.
+ */
+export async function fetchUserGenerations(uid: string): Promise<Array<{ url: string; filename: string }>> {
+    try {
+        const { data, error } = await supabase
+            .from('generations')
+            .select('image_urls, created_at')
+            .eq('user_id', uid)
+            .order('created_at', { ascending: false })
+            .limit(5); // Ambil 5 generation terakhir
+
+        if (error) {
+            console.error('[generateService] Error fetching history:', error);
+            return [];
+        }
+
+        if (!data || data.length === 0) return [];
+
+        // Flatten: setiap row punya image_urls[] → kita pecah jadi item-item individual
+        const results: Array<{ url: string; filename: string }> = [];
+        for (const row of data) {
+            const urls = (row as any).image_urls as string[] | null;
+            if (!urls) continue;
+            for (let i = 0; i < urls.length; i++) {
+                results.push({
+                    url: urls[i],
+                    filename: `flowgen-history-${i + 1}.png`,
+                });
+            }
+        }
+
+        return results;
+    } catch (err) {
+        console.error('[generateService] fetchUserGenerations failed:', err);
+        return [];
+    }
+}
+
+/**
  * Call the /api/generate Vercel serverless function.
  * Includes 30s timeout via AbortController.
  * Handles auth token injection and returns generation results.
