@@ -1,0 +1,55 @@
+createdAt
+March 3, 2026 at 9:05:49 AM UTC+7
+(timestamp)
+
+
+credits
+9
+(number)
+
+
+displayName
+"Hanifah Wijayanti"
+(string)
+
+
+email
+"hanifah.wijayanti123@gmail.com"
+(string)
+
+
+lastLoginAt
+March 3, 2026 at 8:07:00 PM UTC+7
+(timestamp)
+
+
+photoURL
+"https://lh3.googleusercontent.com/a/ACg8ocLMAXkZmsAmTQLBYoLAQKLYKEcrhSKOyf_XFWCuCsMeNFj6rWw=s96-c"
+(string)
+
+
+
+
+reservedCredits
+0
+(number)
+
+
+role
+"user"
+(string)
+
+
+source
+"organic"
+(string)
+
+
+uid
+"BwQiXjbFoXgjdNj9gIzILiBCQ1B3"
+(string)
+
+
+updatedAt
+March 3, 2026 at 8:07:00 PM UTC+7
+(timesta

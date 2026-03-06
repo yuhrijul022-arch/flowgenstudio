@@ -1,0 +1,55 @@
+createdAt
+March 4, 2026 at 12:26:02 PM UTC+7
+(timestamp)
+
+
+credits
+5
+(number)
+
+
+displayName
+"panji saputra"
+(string)
+
+
+email
+"pannjisaputra@gmail.com"
+(string)
+
+
+lastLoginAt
+March 4, 2026 at 1:04:13 PM UTC+7
+(timestamp)
+
+
+photoURL
+"https://lh3.googleusercontent.com/a/ACg8ocKm39__-xv-UzVqqVDbCuVnitZgx_JUi_KdFVQM2i7xYBf2fmo=s96-c"
+(string)
+
+
+
+
+
+reservedCredits
+0
+(number)
+
+
+role
+"user"
+(string)
+
+
+source
+"organic"
+(string)
+
+
+uid
+"izWOE6lZpwUpXCg40qf2EUrDmJS2"
+(string)
+
+
+updatedAt
+March 4, 2026 at 1:05:24 PM UTC+7

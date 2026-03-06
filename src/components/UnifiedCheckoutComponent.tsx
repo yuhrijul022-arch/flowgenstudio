@@ -130,7 +130,23 @@ export const UnifiedCheckoutComponent: React.FC = () => {
                 openPopup();
             };
         } else {
-            openPopup();
+            // Check if the loaded script matches current environment (sandbox vs production)
+            const expectedSrc = isProd ? 'https://app.midtrans.com/snap/snap.js' : 'https://app.sandbox.midtrans.com/snap/snap.js';
+            if (script.src !== expectedSrc) {
+                // Remove old script and reload with correct environment
+                script.remove();
+                delete (window as any).snap;
+                const newScript = document.createElement('script');
+                newScript.id = scriptId;
+                newScript.src = expectedSrc;
+                newScript.setAttribute('data-client-key', clientKey);
+                document.body.appendChild(newScript);
+                newScript.onload = () => {
+                    openPopup();
+                };
+            } else {
+                openPopup();
+            }
         }
     };
 

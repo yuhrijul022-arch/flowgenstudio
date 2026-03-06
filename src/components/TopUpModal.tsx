@@ -69,6 +69,10 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({ isOpen, onClose, current
             const isProduction = import.meta.env.VITE_MIDTRANS_IS_PROD === 'true';
             // Load Snap JS if not loaded
             if (!(window as any).snap) {
+                // Remove any existing script that might be from the wrong environment
+                const existingScript = document.querySelector('script[src*="midtrans.com/snap/snap.js"]');
+                if (existingScript) existingScript.remove();
+
                 const script = document.createElement('script');
                 script.src = isProduction
                     ? 'https://app.midtrans.com/snap/snap.js'
@@ -79,6 +83,19 @@ export const TopUpModal: React.FC<TopUpModalProps> = ({ isOpen, onClose, current
                 await new Promise((resolve) => {
                     script.onload = resolve;
                 });
+            } else {
+                // Verify snap is from the correct environment
+                const existingScript = document.querySelector('script[src*="midtrans.com/snap/snap.js"]') as HTMLScriptElement;
+                const expectedSrc = isProduction ? 'https://app.midtrans.com/snap/snap.js' : 'https://app.sandbox.midtrans.com/snap/snap.js';
+                if (existingScript && existingScript.src !== expectedSrc) {
+                    existingScript.remove();
+                    delete (window as any).snap;
+                    const script = document.createElement('script');
+                    script.src = expectedSrc;
+                    script.setAttribute('data-client-key', clientKey);
+                    document.body.appendChild(script);
+                    await new Promise((resolve) => { script.onload = resolve; });
+                }
             }
 
             const pollAndClose = async (userId: string) => {

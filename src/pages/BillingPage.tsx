@@ -79,6 +79,10 @@ export const BillingPage: React.FC = () => {
             const clientKey = import.meta.env.VITE_MIDTRANS_CLIENT_KEY || '';
 
             if (!(window as any).snap) {
+                // Remove any existing script from wrong environment
+                const existingScript = document.querySelector('script[src*="midtrans.com/snap/snap.js"]');
+                if (existingScript) existingScript.remove();
+
                 const script = document.createElement('script');
                 script.src = isProd
                     ? 'https://app.midtrans.com/snap/snap.js'
@@ -89,6 +93,19 @@ export const BillingPage: React.FC = () => {
                 await new Promise((resolve) => {
                     script.onload = resolve;
                 });
+            } else {
+                // Verify snap is from the correct environment
+                const existingScript = document.querySelector('script[src*="midtrans.com/snap/snap.js"]') as HTMLScriptElement;
+                const expectedSrc = isProd ? 'https://app.midtrans.com/snap/snap.js' : 'https://app.sandbox.midtrans.com/snap/snap.js';
+                if (existingScript && existingScript.src !== expectedSrc) {
+                    existingScript.remove();
+                    delete (window as any).snap;
+                    const script = document.createElement('script');
+                    script.src = expectedSrc;
+                    script.setAttribute('data-client-key', clientKey);
+                    document.body.appendChild(script);
+                    await new Promise((resolve) => { script.onload = resolve; });
+                }
             }
 
             (window as any).snap.pay(tx.snap_token, {
