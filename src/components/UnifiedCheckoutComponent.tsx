@@ -61,21 +61,22 @@ export const UnifiedCheckoutComponent: React.FC = () => {
         }
 
         const pollAndRedirect = async () => {
-            toast({ type: 'info', title: 'Memverifikasi', description: 'Memeriksa status pembayaran & menambahkan credits...' });
+            // Toast SEKALI saja di awal — tidak di dalam loop
+            toast({ type: 'info', title: 'Memverifikasi', description: 'Sistem sedang memverifikasi pembayaran Anda...' });
             let attempts = 0;
             const interval = setInterval(async () => {
                 attempts++;
-                if (attempts > 15) { // 30 seconds timeout
+                if (attempts > 30) { // 60 seconds timeout (30 × 2s)
                     clearInterval(interval);
                     toast({ type: 'success', title: 'Pembayaran Diterima', description: 'Credits akan masuk dalam beberapa saat.' });
                     navigate('/');
                     return;
                 }
                 try {
-                    const { data } = await supabase.from('users').select('credits').eq('id', userId).single();
-                    if (data && (data as any).credits > startingCredits) {
+                    const { data } = await supabase.from('users').select('pro_active, credits').eq('id', userId).single();
+                    if (data && (data as any).pro_active) {
                         clearInterval(interval);
-                        toast({ type: 'success', title: 'Sukses!', description: `Pembayaran berhasil! Credits kamu: ${(data as any).credits}` });
+                        toast({ type: 'success', title: 'Sukses!', description: `Pembayaran berhasil! Credits Anda: ${(data as any).credits}` });
                         navigate('/');
                     }
                 } catch (e) {
