@@ -150,29 +150,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 return res.status(200).send('OK: No user to credit');
             }
 
-            // Get current user to check existence
+            // Get current user credits
             const { data: currentUser } = await supabase
                 .from('users')
-                .select('id, pro_active')
+                .select('id, credits, pro_active')
                 .eq('id', userId)
                 .single();
 
-            // @ts-ignore
             if (currentUser) {
-                // Atomic increment using RPC
-                const { error: rpcErr } = await supabase.rpc('increment_user_credits', {
-                    user_uuid: userId,
-                    credit_amount: creditsToAdd
-                } as any);
-
-                if (rpcErr) {
-                    console.error('RPC increment_user_credits error:', rpcErr);
+                const currentCredits = (currentUser as any).credits || 0;
+                const updatePayload: any = {
+                    credits: currentCredits + creditsToAdd,
+                };
+                // Set pro_active = true untuk SIGNUP
+                if (type === 'SIGNUP') {
+                    updatePayload.pro_active = true;
                 }
 
-                // Update pro_active separately if needed
-                if (type === 'SIGNUP') {
-                    // @ts-ignore
-                    await supabase.from('users').update({ pro_active: true }).eq('id', userId);
+                const { error: updateErr } = await supabase
+                    .from('users')
+                    .update(updatePayload as never)
+                    .eq('id', userId);
+
+                if (updateErr) {
+                    console.error('Failed to update user credits/pro:', updateErr);
                 }
             } else {
                 // User doesn't exist, create via upsert
@@ -182,10 +183,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                     email: (txData as any).email,
                     username: (txData as any).username,
                     credits: creditsToAdd,
-                    pro_active: type === 'SIGNUP' ? true : false,
+                    pro_active: type === 'SIGNUP',
                 };
-                // @ts-ignore
-                await supabase.from('users').upsert(newUserPayload);
+                await supabase.from('users').upsert(newUserPayload as never);
             }
 
             // Update transaction to success and credited

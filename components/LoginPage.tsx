@@ -173,7 +173,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onSignIn, loading }) => {
 
                 </div>
 
-                <p className="mt-8 text-[11px] text-gray-600">Powered by OpenRouter</p>
+                <p className="mt-8 text-[11px] text-gray-600">© 2026 Calyx Inc. All rights reserved.</p>
             </div>
         </div>
     );

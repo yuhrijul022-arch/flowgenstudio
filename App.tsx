@@ -572,7 +572,7 @@ export const App: React.FC<AppProps> = ({ user }) => {
 
                     <footer className="mt-4 flex justify-between items-center text-[10px] text-gray-600 px-2 pb-8">
                         <span>Flowgen Studio v2.0</span>
-                        <span>Powered by OpenRouter</span>
+                        <span>© 2026 Calyx Inc. All rights reserved.</span>
                     </footer>
                 </main>
             </div>

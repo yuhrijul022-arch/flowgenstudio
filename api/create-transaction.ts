@@ -122,7 +122,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             email,
             username,
             password: password || null,
-            credits_to_add: 60,
+            credits: 60,
             amount: basePrice,
             snap_token: snapToken,
             status: 'pending',
