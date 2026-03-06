@@ -9,6 +9,7 @@ export const AuthGate: React.FC<{ children: (user: AppUser) => React.ReactNode }
     const [user, setUser] = useState<AppUser | null>(null);
     const [authLoading, setAuthLoading] = useState(true);
     const [isPro, setIsPro] = useState<boolean | null>(null);
+    const [authProvider, setAuthProvider] = useState<string | null>(null);
     const initialized = useRef(false);
 
     const checkProStatus = async (uid: string) => {
@@ -28,22 +29,37 @@ export const AuthGate: React.FC<{ children: (user: AppUser) => React.ReactNode }
         supabase.auth.getSession().then(({ data: { session } }) => {
             if (session?.user) {
                 setUser(toAppUser(session.user));
-                checkProStatus(session.user.id);
+                // Deteksi provider: 'google' atau 'email'
+                const provider = session.user.app_metadata?.provider || 'email';
+                setAuthProvider(provider);
+                // Hanya cek pro_active untuk user email/password
+                if (provider === 'email') {
+                    checkProStatus(session.user.id);
+                } else {
+                    setIsPro(true); // Google auth → langsung masuk
+                }
                 ensureUserRow(session.user).catch(console.error);
             }
             setAuthLoading(false);
         });
 
-        // 2. Listener perubahan auth (WAJIB ADA)
+        // 2. Listener perubahan auth
         const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
             console.log(`[AuthGate] Auth event: ${event}`);
             if (session?.user) {
                 setUser(toAppUser(session.user));
-                await checkProStatus(session.user.id);
+                const provider = session.user.app_metadata?.provider || 'email';
+                setAuthProvider(provider);
+                if (provider === 'email') {
+                    await checkProStatus(session.user.id);
+                } else {
+                    setIsPro(true); // Google auth → langsung masuk
+                }
                 ensureUserRow(session.user).catch(console.error);
             } else if (event === 'SIGNED_OUT') {
                 setUser(null);
                 setIsPro(null);
+                setAuthProvider(null);
             }
             setAuthLoading(false);
         });
@@ -63,15 +79,16 @@ export const AuthGate: React.FC<{ children: (user: AppUser) => React.ReactNode }
         return <LoginPage onSignIn={async () => { await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.origin } }); }} loading={false} />;
     }
 
-    // User login tapi belum bayar Pro → tampilkan gerbang pembayaran
-    if (isPro === false) {
+    // HANYA untuk user email/password: cek pro_active
+    // Google auth LANGSUNG masuk tanpa perlu cek pembayaran
+    if (authProvider === 'email' && isPro === false) {
         return <WaitingForPayment email={user.email || ''} onRefresh={() => checkProStatus(user.uid)} />;
     }
 
     return <>{children(user)}</>;
 };
 
-// ── KOMPONEN UI: Gerbang Pembayaran ──
+// ── KOMPONEN UI: Gerbang Pembayaran (hanya untuk email/password) ──
 const WaitingForPayment: React.FC<{ email: string; onRefresh: () => void }> = ({ email, onRefresh }) => {
     const [checking, setChecking] = useState(false);
 
@@ -84,7 +101,6 @@ const WaitingForPayment: React.FC<{ email: string; onRefresh: () => void }> = ({
     return (
         <div className="min-h-screen bg-[#0a0a0a] text-white flex items-center justify-center p-6 font-sans">
             <div className="max-w-md w-full bg-[#1c1c1e] rounded-[2.5rem] p-10 border border-white/5 shadow-2xl text-center relative overflow-hidden">
-                {/* Aksesori visual */}
                 <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-1/2 bg-[#0071e3]/10 blur-[80px] pointer-events-none"></div>
 
                 <div className="relative z-10">
