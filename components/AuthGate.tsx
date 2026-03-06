@@ -13,29 +13,25 @@ export const AuthGate: React.FC<{ children: (user: AppUser) => React.ReactNode }
         if (initialized.current) return;
         initialized.current = true;
 
-        // Gunakan onAuthStateChange sebagai satu-satunya sumber kebenaran (Source of Truth)
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-            console.log(`[AuthGate] Event: ${event}`);
-
-            if (session?.user) {
-                setUser(toAppUser(session.user));
-                // Sync ke DB tanpa memblokir UI
-                ensureUserRow(session.user).catch(console.error);
-            } else {
-                setUser(null);
-            }
-
-            // HANYA set loading false setelah event INITIAL_SESSION atau SIGNED_IN diterima
-            setAuthLoading(false);
-        });
-
-        // Pengecekan sesi awal tetap dilakukan untuk mempercepat proses jika token masih segar
+        // 1. Ambil session awal
         supabase.auth.getSession().then(({ data: { session } }) => {
             if (session?.user) {
                 setUser(toAppUser(session.user));
-                setAuthLoading(false);
+                ensureUserRow(session.user).catch(console.error);
             }
-            // Jika null, biarkan onAuthStateChange yang memutuskan di atas
+            setAuthLoading(false);
+        });
+
+        // 2. Listener perubahan auth (WAJIB ADA)
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+            console.log(`[AuthGate] Auth event: ${event}`);
+            if (session?.user) {
+                setUser(toAppUser(session.user));
+                ensureUserRow(session.user).catch(console.error);
+            } else if (event === 'SIGNED_OUT') {
+                setUser(null);
+            }
+            setAuthLoading(false);
         });
 
         return () => subscription.unsubscribe();
