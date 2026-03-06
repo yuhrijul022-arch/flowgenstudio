@@ -120,7 +120,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             type: 'TOPUP',
             user_id: uid,
             email,
-            credits_to_add: creditsQty,
+            credits: creditsQty,
             amount: totalPrice,
             snap_token: snapToken,
             status: 'pending',

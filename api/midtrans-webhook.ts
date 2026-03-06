@@ -74,7 +74,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 type: type,
                 amount: parseInt(grossAmountStr, 10),
                 email: 'unknown@webhook.com',  // Placeholder since payload doesn't have email reliably
-                credits_to_add: 0, // Cannot assume credits to add if missing!
+                credits: 0, // Cannot assume credits to add if missing!
                 status: 'pending',
                 raw_notification: notification
             } as any).select().single();
@@ -120,7 +120,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             }
 
             let userId = (txData as any).user_id;
-            let creditsToAdd = (txData as any).credits_to_add || 0;
+            let creditsToAdd = (txData as any).credits || 0;
 
             if (!userId) {
                 const emailFallback = (txData as any).email || notification.customer_details?.email;
